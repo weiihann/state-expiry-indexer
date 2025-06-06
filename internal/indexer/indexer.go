@@ -38,11 +38,12 @@ func NewIndexer(path string, repo *repository.StateRepository) *Indexer {
 }
 
 func NewService(path string, repo *repository.StateRepository, config internal.Config) *Service {
+	log := logger.GetLogger("indexer-service")
 	return &Service{
 		indexer: NewIndexer(path, repo),
 		repo:    repo,
 		config:  config,
-		log:     logger.GetLogger("indexer-service"),
+		log:     log,
 	}
 }
 
@@ -143,10 +144,27 @@ func (s *Service) Run(ctx context.Context, endBlock uint64) error {
 		start = 1
 	}
 
+	lastProgressTime := time.Now()
+	lastProgressBlock := start - 1
+
 	for blockNumber := start; blockNumber <= endBlock; blockNumber++ {
 		s.log.Debug("Processing block", "block_number", blockNumber)
 		if err := s.indexer.ProcessBlock(ctx, blockNumber); err != nil {
 			return fmt.Errorf("could not process block %d: %w", blockNumber, err)
+		}
+
+		// Show simple progress every 1000 blocks or 8 seconds
+		now := time.Now()
+		blocksSinceProgress := blockNumber - lastProgressBlock
+		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
+
+		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
+			s.log.Info("Index progress",
+				"current_block", blockNumber,
+				"target_block", endBlock,
+				"remaining", endBlock-blockNumber)
+			lastProgressTime = now
+			lastProgressBlock = blockNumber
 		}
 	}
 
@@ -210,6 +228,8 @@ func (s *Service) processAvailableFiles(ctx context.Context) error {
 
 	processedCount := 0
 	currentBlock := lastIndexedBlock + 1
+	lastProgressTime := time.Now()
+	lastProgressBlock := lastIndexedBlock
 
 	// Process files sequentially from the next unprocessed block
 	for {
@@ -233,6 +253,19 @@ func (s *Service) processAvailableFiles(ctx context.Context) error {
 		// Process the file
 		if err := s.indexer.ProcessBlock(ctx, currentBlock); err != nil {
 			return fmt.Errorf("could not process block %d: %w", currentBlock, err)
+		}
+
+		// Show simple progress every 1000 blocks or 8 seconds
+		now := time.Now()
+		blocksSinceProgress := currentBlock - lastProgressBlock
+		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
+
+		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
+			s.log.Info("Processing progress",
+				"current_block", currentBlock,
+				"processed_this_cycle", processedCount+1)
+			lastProgressTime = now
+			lastProgressBlock = currentBlock
 		}
 
 		s.log.Debug("Successfully processed block",
