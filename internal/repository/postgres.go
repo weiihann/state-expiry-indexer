@@ -42,7 +42,15 @@ func (r *StateRepository) GetLastIndexedBlock(ctx context.Context) (uint64, erro
 	return blockNumber, nil
 }
 
-func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber uint64, accounts map[string]bool, storage map[string]map[string]bool) error {
+func (r *StateRepository) updateLastIndexedBlockInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64) error {
+	sql := `UPDATE metadata SET value = $1 WHERE key = 'last_indexed_block'`
+	if _, err := tx.Exec(ctx, sql, fmt.Sprintf("%d", blockNumber)); err != nil {
+		return fmt.Errorf("could not update last indexed block: %w", err)
+	}
+	return nil
+}
+
+func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber uint64, accounts map[string]struct{}, storage map[string]map[string]struct{}) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("could not begin transaction: %w", err)
@@ -57,20 +65,19 @@ func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber u
 		return err
 	}
 
-	sql := `UPDATE metadata SET value = $1 WHERE key = 'last_indexed_block'`
-	if _, err := tx.Exec(ctx, sql, fmt.Sprintf("%d", blockNumber)); err != nil {
-		return fmt.Errorf("could not update last indexed block in tx: %w", err)
+	if err := r.updateLastIndexedBlockInTx(ctx, tx, blockNumber); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)
 }
 
-func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, accounts map[string]bool) error {
+func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, accounts map[string]struct{}) error {
 	if len(accounts) == 0 {
 		return nil
 	}
 
-	var values []interface{}
+	var values []any
 	var placeholders []string
 	i := 1
 	for acc := range accounts {
@@ -104,12 +111,12 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	return nil
 }
 
-func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, storage map[string]map[string]bool) error {
+func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, storage map[string]map[string]struct{}) error {
 	if len(storage) == 0 {
 		return nil
 	}
 
-	var values []interface{}
+	var values []any
 	var placeholders []string
 	i := 1
 	for addr, slots := range storage {

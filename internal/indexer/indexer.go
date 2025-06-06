@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
+	core "github.com/ethereum/go-ethereum/core"
+	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
 	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
@@ -20,11 +23,10 @@ type Indexer struct {
 }
 
 type Service struct {
-	indexer      *Indexer
-	repo         *repository.StateRepository
-	progressFile string
-	startBlock   uint64
-	log          *slog.Logger
+	indexer *Indexer
+	repo    *repository.StateRepository
+	config  internal.Config
+	log     *slog.Logger
 }
 
 func NewIndexer(path string, repo *repository.StateRepository) *Indexer {
@@ -35,14 +37,24 @@ func NewIndexer(path string, repo *repository.StateRepository) *Indexer {
 	}
 }
 
-func NewService(path string, repo *repository.StateRepository, startBlock uint64) *Service {
+func NewService(path string, repo *repository.StateRepository, config internal.Config) *Service {
 	return &Service{
-		indexer:      NewIndexer(path, repo),
-		repo:         repo,
-		progressFile: filepath.Join(path, "last_processed_block.txt"),
-		startBlock:   startBlock,
-		log:          logger.GetLogger("indexer-service"),
+		indexer: NewIndexer(path, repo),
+		repo:    repo,
+		config:  config,
+		log:     logger.GetLogger("indexer-service"),
 	}
+}
+
+func (i *Indexer) ProcessGenesis(ctx context.Context) error {
+	genesis := core.DefaultGenesisBlock()
+
+	accessedAccounts := make(map[string]struct{}, len(genesis.Alloc))
+	for acc := range genesis.Alloc {
+		accessedAccounts[acc.String()] = struct{}{}
+	}
+
+	return i.repo.UpdateBlockDataInTx(ctx, 0, accessedAccounts, nil)
 }
 
 func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
@@ -59,23 +71,23 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 		return fmt.Errorf("could not unmarshal state diff for block %d: %w", blockNumber, err)
 	}
 
-	i.log.Info("Processing block", "block_number", blockNumber, "transaction_count", len(stateDiffs))
+	i.log.Debug("Processing block", "block_number", blockNumber, "transaction_count", len(stateDiffs))
 
-	accessedAccounts := make(map[string]bool)
-	accessedStorage := make(map[string]map[string]bool)
+	accessedAccounts := make(map[string]struct{})
+	accessedStorage := make(map[string]map[string]struct{})
 
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
-			accessedAccounts[addr] = true // Any appearance in the state diff means the account was accessed
+			accessedAccounts[addr] = struct{}{} // Any appearance in the state diff means the account was accessed
 
 			if diff.Storage != nil {
 				if _, ok := accessedStorage[addr]; !ok {
-					accessedStorage[addr] = make(map[string]bool)
+					accessedStorage[addr] = make(map[string]struct{})
 				}
-				storageMap, ok := diff.Storage.(map[string]interface{})
+				storageMap, ok := diff.Storage.(map[string]any)
 				if ok {
 					for slot := range storageMap {
-						accessedStorage[addr][slot] = true
+						accessedStorage[addr][slot] = struct{}{}
 					}
 				}
 			}
@@ -107,26 +119,29 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 		return fmt.Errorf("could not update block data for block %d: %w", blockNumber, err)
 	}
 
-	i.log.Info("Successfully updated block data", "block_number", blockNumber)
+	i.log.Debug("Successfully updated block data", "block_number", blockNumber)
 
 	return nil
 }
 
 func (s *Service) Run(ctx context.Context, endBlock uint64) error {
-	lastProcessed, err := s.repo.GetLastIndexedBlock(ctx)
+	start, err := s.repo.GetLastIndexedBlock(ctx)
 	if err != nil {
 		return fmt.Errorf("could not get last processed block: %w", err)
-	}
-
-	start := lastProcessed + 1
-	if s.startBlock > start {
-		start = s.startBlock
 	}
 
 	s.log.Info("Starting indexer service",
 		"start_block", start,
 		"end_block", endBlock,
 		"total_blocks", endBlock-start+1)
+
+	if start == 0 {
+		if err := s.indexer.ProcessGenesis(ctx); err != nil {
+			return fmt.Errorf("could not process genesis: %w", err)
+		}
+		s.log.Info("Successfully processed genesis")
+		start = 1
+	}
 
 	for blockNumber := start; blockNumber <= endBlock; blockNumber++ {
 		s.log.Debug("Processing block", "block_number", blockNumber)
@@ -144,4 +159,98 @@ func (s *Service) Run(ctx context.Context, endBlock uint64) error {
 // ProcessBlock processes a single block through the indexer
 func (s *Service) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	return s.indexer.ProcessBlock(ctx, blockNumber)
+}
+
+// RunProcessor starts the indexer processor workflow that processes available files
+func (s *Service) RunProcessor(ctx context.Context) error {
+	s.log.Info("Starting indexer processor workflow",
+		"poll_interval", s.config.PollInterval,
+		"data_path", s.indexer.Path)
+
+	pollInterval := time.Duration(s.config.PollInterval) * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.log.Info("Indexer processor workflow stopped")
+			return nil
+		default:
+			// Continue with processing logic
+		}
+
+		if err := s.processAvailableFiles(ctx); err != nil {
+			s.log.Warn("Processing cycle failed, retrying...",
+				"error", err,
+				"retry_interval", pollInterval)
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Wait before next processing cycle
+		time.Sleep(pollInterval)
+	}
+}
+
+// processAvailableFiles processes all available files that haven't been indexed yet
+func (s *Service) processAvailableFiles(ctx context.Context) error {
+	lastIndexedBlock, err := s.repo.GetLastIndexedBlock(ctx)
+	if err != nil {
+		return fmt.Errorf("could not get last processed block: %w", err)
+	}
+
+	s.log.Debug("Checking for files to process", "last_indexed_block", lastIndexedBlock)
+
+	// Special case: process genesis if starting from block 0
+	if lastIndexedBlock == 0 {
+		if err := s.indexer.ProcessGenesis(ctx); err != nil {
+			return fmt.Errorf("could not process genesis: %w", err)
+		}
+		s.log.Info("Successfully processed genesis")
+	}
+
+	processedCount := 0
+	currentBlock := lastIndexedBlock + 1
+
+	// Process files sequentially from the next unprocessed block
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		filename := fmt.Sprintf("%d.json", currentBlock)
+		filePath := filepath.Join(s.indexer.Path, filename)
+
+		// Check if file exists
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			// No more files available to process
+			break
+		} else if err != nil {
+			return fmt.Errorf("could not check file %s: %w", filename, err)
+		}
+
+		// Process the file
+		if err := s.indexer.ProcessBlock(ctx, currentBlock); err != nil {
+			return fmt.Errorf("could not process block %d: %w", currentBlock, err)
+		}
+
+		s.log.Debug("Successfully processed block",
+			"block_number", currentBlock,
+			"filename", filename)
+
+		processedCount++
+		currentBlock++
+	}
+
+	if processedCount > 0 {
+		s.log.Info("Completed processing cycle",
+			"processed_blocks", processedCount,
+			"last_indexed_block", currentBlock-1)
+	} else {
+		s.log.Debug("No new files available for processing",
+			"last_indexed_block", lastIndexedBlock)
+	}
+
+	return nil
 }

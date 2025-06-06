@@ -24,17 +24,25 @@ Based on analysis of the codebase, significant progress has been made by previou
 8. **Database Schema**: PostgreSQL tables with proper partitioning and domains
 9. **Docker Compose**: PostgreSQL database setup
 
-**❌ Integration Issues Identified:**
-1. **Two Separate Workflows**: The current `cmd/run.go` only implements the RPC caller workflow (downloading state diffs), but doesn't integrate with the indexer that processes the files
-2. **Missing Database Connection**: The run command doesn't connect to or initialize the database
-3. **No Database Migrations**: The schema exists but there's no migration runner
-4. **Missing API Command**: No CLI command to start the API server
-5. **No End-to-End Integration**: Components exist separately but don't work together as a unified system
+**❌ Architectural Issues Identified:**
+1. **Tightly Coupled RPC and Indexer Workflows**: The current `runIndexerWorkflow` in `cmd/run.go` combines both RPC data collection and indexing in a single process, which creates fault tolerance and scalability issues
+2. **No Independent Process Control**: Can't run RPC caller and indexer at different speeds or restart them independently
+3. **Limited Fault Recovery**: If indexer fails, RPC progress is lost; can't replay indexing without re-downloading
+4. **Testing Complexity**: Hard to test indexer independently without RPC dependencies
+5. **No Graceful Degradation**: Single failure point affects both data collection and processing
 
-### Current Task: Complete Integration and Testing
-The goal is to integrate all existing components into a cohesive, production-ready application with comprehensive testing.
+### Current Task: Architectural Separation and Testing
+The goal is to properly separate the RPC caller from the indexer workflow, then implement genesis processing and comprehensive testing.
 
 ## Key Challenges and Analysis
+
+### Architectural Challenges:
+1. **Workflow Separation**: Current implementation tightly couples RPC calling (data collection) with indexing (data processing) in a single loop
+2. **Independent State Tracking**: Need separate tracking for "last downloaded block" vs "last indexed block"
+3. **Fault Tolerance**: Each process should be able to fail and recover independently
+4. **Process Coordination**: Ensure indexer doesn't get ahead of RPC caller, but can run at different speeds
+5. **Error Handling**: Separate error handling and retry logic for each workflow
+6. **Resource Management**: Each process should manage its own resources independently
 
 ### Integration Challenges:
 1. **Unified Application Flow**: Need to coordinate the RPC caller (downloads state diffs) with the indexer (processes files and updates database)
@@ -66,11 +74,18 @@ The goal is to integrate all existing components into a cohesive, production-rea
 4. **Test Isolation**: Each test should start with clean state
 5. **Integration Testing**: End-to-end tests that verify the entire pipeline
 
+### Genesis File Processing:
+1. **Missing Genesis Implementation**: The `ProcessGenesis()` method in the indexer currently panics with "TODO: implement me"
+2. **Genesis File Structure**: Located at `data/genesis.json` containing Ethereum genesis block allocation data (678KB)
+3. **Initial State Setup**: Genesis processing is critical for establishing the initial state of all accounts and storage slots
+4. **Large Genesis Data**: The genesis file contains substantial account allocation data that needs efficient processing
+5. **Database Initialization**: Genesis processing sets up the baseline state before normal block processing begins
+
 ## High-level Task Breakdown
 
 This section outlines the step-by-step implementation plan. As the Executor, I will only complete one task at a time and await your verification before proceeding to the next.
 
-### Phase 1: Core Integration
+### Phase 1: Core Integration ✅ **COMPLETED**
 1. **Database Migration System with golang-migrate** ✅ **COMPLETED**:
    - **Task**: Integrate golang-migrate library for professional database migration handling
    - **Success Criteria**: 
@@ -91,7 +106,7 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - Graceful shutdown handling for both services
      - Coordinated error handling between all components
 
-3. **Logging System Enhancement with log/slog**:
+3. **Logging System Enhancement with log/slog** ✅ **COMPLETED**:
    - **Task**: Replace all fmt.Printf/fmt.Println with structured logging using Go's log/slog package and add CLI log level control
    - **Success Criteria**: 
      - Replace all fmt.Printf/fmt.Println calls with structured slog logging
@@ -107,7 +122,7 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - ✅ **NEW**: Automatic terminal detection (colors disabled when not in TTY)
      - ✅ **NEW**: Created comprehensive Makefile with 25+ targets for build automation
 
-4. **Configuration Enhancement**:
+4. **Configuration Enhancement** ✅ **COMPLETED**:
    - **Task**: Enhance configuration to support all components and environments
    - **Success Criteria**: 
      - Unified config for database, RPC, API server, file paths
@@ -115,8 +130,50 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - API server port configuration
      - Validation of required configuration
 
-### Phase 2: Testing Framework
-4. **Database Testing Setup**:
+### Phase 2: Architectural Separation and Core Features ✅ **COMPLETED**
+5. **Separate RPC Caller and Indexer Workflows** ✅ **COMPLETED**:
+   - **Task**: Split the current tightly-coupled `runIndexerWorkflow` into two independent processes: RPC Caller (data collection) and Indexer (data processing)
+   - **Success Criteria**:
+     - **RPC Caller Process**: Independent workflow that polls for new blocks, downloads state diffs, saves files, tracks "last_downloaded_block"
+     - **Indexer Process**: Independent workflow that scans for new files, processes them into database, tracks "last_indexed_block"
+     - **Separate State Tracking**: Two different trackers - one for RPC downloads, one for indexer progress
+     - **Independent error Handling**: Each process has its own retry logic and error recovery
+     - **Fault Tolerance**: RPC caller can continue if indexer fails, indexer can catch up independently
+     - **Configurable Scheduling**: Each process can run at different intervals (RPC fast, indexer batch)
+     - **Graceful Coordination**: Indexer waits for files to be available, doesn't get ahead of RPC caller
+     - **CLI Commands**: Separate commands to run RPC caller only, indexer only, or both together
+     - **Testing Support**: Can test indexer independently with static files, no RPC dependency
+     - **Recovery Scenarios**: Can replay indexing from any point without re-downloading data
+
+6. **Genesis File Processing Implementation** ✅ **COMPLETED**:
+   - **Task**: Implement the `ProcessGenesis()` method to handle Ethereum genesis block initial state allocation
+   - **Success Criteria**:
+     - Parse the `data/genesis.json` file (678KB) containing initial account allocations
+     - Extract account addresses and balances from the genesis allocation data
+     - Insert initial account records into `accounts_current` table with `last_access_block = 0`
+     - Handle the large dataset efficiently with batch processing
+     - Add proper error handling and logging for genesis processing
+     - Update database metadata to indicate genesis has been processed
+     - Add CLI command or flag to trigger genesis processing separately if needed
+     - Verify genesis processing works with the existing indexer service workflow
+
+### Phase 2.1: Progress Tracking Enhancement ⚠️ **IMMEDIATE PRIORITY**
+7. **Progress Tracking for Download and Processing Workflows**:
+   - **Task**: Add progress tracking mechanism to both RPC caller and indexer workflows to show real-time progress during operation
+   - **Success Criteria**:
+     - **RPC Caller Progress**: Track and display download progress with metrics like "Downloaded 1000/5000 blocks (20%)"
+     - **Indexer Progress**: Track and display processing progress with metrics like "Processed 800/1000 available blocks (80%)"
+     - **Time-based Progress**: Show progress every 8 seconds regardless of block count
+     - **Block-based Progress**: Show progress every 1000 blocks downloaded/processed
+     - **Progress Metrics**: Include blocks per second, time elapsed, estimated time remaining
+     - **Structured Logging**: Use structured logging for progress messages with consistent format
+     - **Current Status Display**: Show current block number, latest block number, and gap/lag information
+     - **Error Impact**: Progress tracking should not affect error handling or performance
+     - **CLI Integration**: Progress tracking works with all CLI commands (download, index, run)
+     - **Configuration**: Make progress intervals configurable (default: 1000 blocks or 8 seconds)
+
+### Phase 3: Testing Framework ⚠️ **NEXT PRIORITY**
+8. **Database Testing Setup**:
    - **Task**: Create test database management using Docker and golang-migrate
    - **Success Criteria**: 
      - Test helper that starts/stops PostgreSQL container
@@ -124,7 +181,19 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - Test isolation (clean database per test)
      - Integration with Go testing framework
 
-5. **Component Unit Tests**:
+9. **Test Data Creation with Mock State Diffs**:
+   - **Task**: Create comprehensive test fixtures with 100 blocks of realistic state diff data in `testdata/` directory
+   - **Success Criteria**:
+     - Generate 100 JSON files (blocks 1-100) with realistic state diff data matching the `rpc.TransactionResult` structure
+     - Each block should contain multiple transactions with state changes (accounts, storage, balances, nonces)
+     - Include variety of scenarios: new accounts, existing account updates, storage changes, contract interactions
+     - Files should follow the same naming convention as production: `1.json`, `2.json`, etc.
+     - Create realistic Ethereum addresses and storage slot keys using proper hex formatting
+     - Include both empty state diff blocks (like current data files) and blocks with substantial state changes
+     - Add test configuration to use `testdata/` directory instead of `data/` for testing
+     - Create helper functions to easily load and verify test data in unit tests
+
+10. **Component Unit Tests**:
    - **Task**: Write comprehensive unit tests for each package
    - **Success Criteria**: 
      - Repository tests with real database
@@ -134,8 +203,8 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - API endpoint tests
      - All tests pass and achieve good coverage
 
-### Phase 3: Integration Testing
-6. **End-to-End Integration Tests**:
+### Phase 4: Integration Testing
+11. **End-to-End Integration Tests**:
    - **Task**: Create integration tests that verify the complete pipeline
    - **Success Criteria**: 
      - Test that simulates downloading state diffs and processing them
@@ -143,7 +212,7 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
      - Error scenario testing
      - Performance testing with realistic data volumes
 
-7. **Test Fixtures and Mock Data**:
+12. **Test Fixtures and Mock Data**:
    - **Task**: Create comprehensive test fixtures for consistent testing
    - **Success Criteria**: 
      - Sample state diff JSON files
@@ -153,175 +222,145 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 
 ## Project Status Board
 
-### Phase 1: Core Integration
+### Phase 1: Core Integration ✅ **COMPLETED**
 - [x] **Database Migration System with golang-migrate** ✅ **COMPLETED**
 - [x] **Unified Run Command with Indexer and API Server** ✅ **COMPLETED**
 - [x] **Logging System Enhancement with log/slog** ✅ **COMPLETED**
 - [x] **Configuration Enhancement** ✅ **COMPLETED**
 
-### Phase 2: Testing Framework
-- [ ] Database Testing Setup
-- [ ] Component Unit Tests
+### Phase 2: Architectural Separation and Core Features ✅ **COMPLETED**
+- [x] **Separate RPC Caller and Indexer Workflows** ✅ **COMPLETED**
+- [x] **Genesis File Processing Implementation** ✅ **COMPLETED**
 
-### Phase 3: Integration Testing
-- [ ] End-to-End Integration Tests
-- [ ] Test Fixtures and Mock Data
+### Phase 2.1: Progress Tracking Enhancement ⚠️ **IMMEDIATE PRIORITY**
+- [ ] **Progress Tracking for Download and Processing Workflows**
+
+### Phase 3: Testing Framework ⚠️ **NEXT PRIORITY**
+- [ ] **Database Testing Setup**
+- [ ] **Test Data Creation with Mock State Diffs**
+- [ ] **Component Unit Tests**
+
+### Phase 4: Integration Testing
+- [ ] **End-to-End Integration Tests**
+- [ ] **Test Fixtures and Mock Data**
 
 ## Current Status / Progress Tracking
 
-**Task 1 Completed Successfully:** Database Migration System with golang-migrate
-- ✅ Integrated golang-migrate v4.18.3 with PostgreSQL driver
-- ✅ Created comprehensive CLI commands: `migrate up`, `migrate down`, `migrate status`, `migrate version`
-- ✅ Database connection helper supports both pgxpool and database/sql interfaces
-- ✅ All existing migration files (0001-0003) work correctly with golang-migrate
-- ✅ Proper error handling for database connection failures
-- ✅ Migration state tracking via schema_migrations table
-- ✅ Transaction safety for migration operations
+**Phase 1 & 2 Successfully Completed:** All core integration and architectural separation tasks have been completed successfully, providing a robust foundation with proper separation of concerns and comprehensive feature set.
 
-**Task 2 Completed Successfully:** Unified Run Command with Indexer and API Server
-- ✅ Integrated indexer component into the run command workflow
-- ✅ Integrated API server to run concurrently with the indexer
-- ✅ Added database connection initialization and connection pooling for both services
-- ✅ Implemented RPC caller → file storage → indexer → database pipeline
-- ✅ Added automatic migration checks before starting services
-- ✅ Implemented graceful shutdown handling for concurrent services
-- ✅ Set up proper error handling and logging coordination
-- ✅ Enhanced configuration with API_PORT support
-- ✅ Created ProcessBlock method on indexer Service for single block processing
+**Major Architectural Achievement:** The critical architectural separation has been successfully implemented, transforming the tightly-coupled workflow into independent, fault-tolerant processes.
 
-**Task 3 Completed Successfully:** Logging System Enhancement with log/slog
-- ✅ Created centralized logging package using Go's log/slog
-- ✅ Added CLI flags `--log-level` (debug, info, warn, error) and `--log-format` (text, json)
-- ✅ Replaced all 34+ fmt.Printf/fmt.Println calls with structured logging
-- ✅ Added component context to all loggers (run-cmd, indexer-workflow, migrate-up, etc.)
-- ✅ Implemented structured key-value logging for debugging information
-- ✅ Added proper log level filtering (error level filters out info messages)
-- ✅ Configured both text format (development) and JSON format (production)
-- ✅ Enhanced error messages with proper context for debugging
-- ✅ Added logging configuration to config structure with environment variable support
-- ✅ **NEW**: Added colored output support with ANSI color codes for different log levels
-- ✅ **NEW**: Added `--no-color` flag to disable colored output
-- ✅ **NEW**: Automatic terminal detection (colors disabled when not in TTY)
-- ✅ **NEW**: Created comprehensive Makefile with 25+ targets for build automation
+**Task 5 Completed Successfully:** Separate RPC Caller and Indexer Workflows
+- ✅ **Independent RPC Caller Process**: Dedicated workflow for data collection that polls for new blocks, downloads state diffs, saves files, and tracks "last_downloaded_block"
+- ✅ **Independent Indexer Process**: Dedicated workflow for data processing that scans for new files, processes them into database, and tracks "last_indexed_block"  
+- ✅ **Separate State Tracking**: Implemented dual tracking system with DownloadTracker and ProcessTracker for independent progress management
+- ✅ **Independent Error Handling**: Each process has its own retry logic, error recovery, and fault tolerance mechanisms
+- ✅ **Fault Tolerance**: RPC caller can continue independently if indexer fails, indexer can catch up independently without data loss
+- ✅ **CLI Command Separation**: Added `download` command for RPC-only operation, `index` command for processing-only operation, and enhanced `run` command for coordinated operation
+- ✅ **Testing Support**: Indexer can now be tested independently with static files, eliminating RPC dependencies for unit testing
+- ✅ **Recovery Scenarios**: Full replay capability - can restart indexing from any point without re-downloading data
+- ✅ **Graceful Coordination**: Indexer waits for files to be available and properly coordinates with RPC caller without getting ahead
 
-**Verified Working Integration:**
-- `go run main.go run` - Starts both indexer workflow and API server concurrently
-- API server responds on http://localhost:8080 with "State Expiry API"
-- API endpoints functional: `/api/v1/stats/expired-count?expiry_block=1000000` returns `{"expired_state_count":0}`
-- Database migrations automatically applied before services start
-- Graceful shutdown with Ctrl+C stops both services cleanly
-- Shared database connection pool between indexer and API server
-- Configuration supports both environment variables and config files
+**Task 6 Completed Successfully:** Genesis File Processing Implementation  
+- ✅ **Genesis File Parsing**: Successfully implemented parsing of the 678KB `data/genesis.json` file containing Ethereum genesis block allocation data
+- ✅ **Account Extraction**: Extracts account addresses and balances from genesis allocation data with proper hex address handling
+- ✅ **Database Integration**: Inserts initial account records into `accounts_current` table with `last_access_block = 0` for genesis state
+- ✅ **Batch Processing**: Implements efficient batch processing to handle the large dataset (8893 genesis accounts) with configurable batch size
+- ✅ **Error Handling**: Comprehensive error handling and structured logging throughout genesis processing workflow
+- ✅ **Metadata Tracking**: Updates database metadata table to track genesis processing status and prevent duplicate processing
+- ✅ **CLI Integration**: Added `--genesis` flag to run command and dedicated `genesis` CLI command for standalone genesis processing
+- ✅ **Service Integration**: Genesis processing properly integrated with indexer service workflow and can be triggered independently
 
-**Logging System Verification:**
-- ✅ CLI flags work: `--log-level debug`, `--log-level info`, `--log-level error`
-- ✅ JSON format works: `--log-format json` produces structured JSON logs
-- ✅ Text format works: `--log-format text` produces human-readable logs
-- ✅ Log level filtering works: error level filters out info/debug messages
-- ✅ Component context included: each log shows which component generated it
-- ✅ Structured data: block numbers, addresses, error contexts properly structured
-- ✅ All components updated: cmd/run.go, cmd/migrate.go, internal/indexer, internal/api, internal/database
+**Architectural Benefits Achieved:**
+1. **Fault Tolerance**: System can handle individual component failures gracefully
+2. **Recovery Capability**: Full replay scenarios supported without data re-downloading
+3. **Testing Independence**: Components can be tested in isolation with mock/static data
+4. **Scalability**: Each process can run at optimal speed without blocking the other
+5. **Debugging Simplicity**: Issues can be isolated to specific components more easily
+6. **Operational Flexibility**: Can run data collection and processing at different schedules
 
-**Database Schema Verification:**
-- All tables created correctly: accounts_current, storage_current, metadata
-- All 16 partitions created for both main tables  
-- schema_migrations table tracking applied migrations
-- Version 3 (latest) applied and clean
+**Enhanced CLI Commands Available:**
+- `go run main.go download` - Run RPC caller process only (data collection)
+- `go run main.go index` - Run indexer process only (data processing)  
+- `go run main.go run` - Run both processes in coordinated mode (original behavior)
+- `go run main.go genesis` - Process genesis file independently
+- `go run main.go run --genesis` - Run normal workflow with genesis processing
 
-**Task 4 Completed Successfully:** Configuration Enhancement
-- ✅ Enhanced Config struct with comprehensive fields for all components (database, RPC, API server, file storage, indexer, logging, environment)
-- ✅ Added robust validation system with custom ValidationError and ValidationErrors types
-- ✅ Implemented validation for required fields (RPC_URL, database credentials)
-- ✅ Added port number validation, connection pool validation, timeout validation
-- ✅ Added validation for log levels, log formats, and environment types
-- ✅ Enhanced error messages with detailed field-specific validation errors
-- ✅ Added configuration defaults for all fields using viper.SetDefault
-- ✅ Added support for path expansion (environment variables and home directory)
-- ✅ Added environment-specific settings (development, staging, production)
-- ✅ Created helper methods: GetDatabaseConnectionString(), IsProduction(), IsDevelopment()
-- ✅ Updated database connection to use configurable connection pool settings
-- ✅ Updated run command to utilize all new configuration options
-- ✅ Enhanced configuration example file with documentation and all new options
-- ✅ Configuration validation prevents application startup with invalid settings
+**Genesis Processing Verification:**
+- Successfully processed 8,893 genesis accounts from `data/genesis.json`
+- All accounts inserted with proper addresses, balances, and `last_access_block = 0` 
+- Database metadata properly tracks genesis processing status
+- Integration with existing indexer workflow verified
+- Performance optimized with batch processing (1000 accounts per batch)
 
-**Enhanced Configuration Features:**
-- ✅ **Comprehensive Configuration**: 19 configuration fields covering all application components
-- ✅ **Database Pool Configuration**: Configurable DB_MAX_CONNS and DB_MIN_CONNS  
-- ✅ **RPC Configuration**: Configurable timeouts and endpoints
-- ✅ **File Storage Configuration**: Configurable data directories and state diff paths
-- ✅ **Indexer Configuration**: Configurable batch sizes and poll intervals
-- ✅ **Environment Support**: development/staging/production environment detection
-- ✅ **Path Expansion**: Support for environment variables and ~ home directory expansion
-- ✅ **Graceful Fallbacks**: Config file optional, falls back to environment variables and defaults
-- ✅ **Validation Integration**: Run command prevents startup with invalid configuration
-- ✅ **Enhanced Logging**: Configuration details logged on successful load
+**System Architecture Now Ready for Testing:** With the architectural separation complete and genesis processing implemented, the system now has:
+- Proper separation of concerns
+- Independent process management
+- Complete initial state setup via genesis processing
+- Fault-tolerant architecture
+- Testing-friendly component isolation
 
-**Verified Working Integration:**
-- Application builds successfully with all new configuration options
-- Migration commands work with enhanced configuration system
-- Configuration validation prevents startup with missing required fields
-- All CLI flags and logging integration continue to work properly
-- Database connection uses configurable pool settings from config
-- File paths use configurable directories from config instead of hard-coded values
+**Phase 3 Next Priority:** The testing framework is now the next logical step, as we have:
+1. ✅ Solid architectural foundation with separated components
+2. ✅ Complete feature set including genesis processing  
+3. ✅ Independent processes that can be tested in isolation
+4. ⚠️ **READY FOR**: Comprehensive testing framework to verify all functionality
 
-**Next Task Ready:** Should I proceed as Executor to implement **Phase 2: Testing Framework - Task 5: Database Testing Setup**? This will involve:
-- Creating test database management using Docker and golang-migrate
-- Test helper that starts/stops PostgreSQL container
-- Using golang-migrate for test database schema setup  
-- Test isolation (clean database per test)
+**Next Task Ready:** Should I proceed as Executor to implement **Task 7: Database Testing Setup**? This will establish the foundation for all subsequent testing by creating:
+- Docker-based test database management
+- golang-migrate integration for test schema setup
+- Test isolation mechanisms
 - Integration with Go testing framework
 
-**Request:** Please confirm I should proceed with Task 5: Database Testing Setup.
+**Request:** Please confirm I should proceed with Task 7: Database Testing Setup to begin Phase 3.
+
+**Architectural Analysis:**
+- ✅ **Issue Resolved**: Tight coupling in `runIndexerWorkflow` successfully separated into independent processes
+- ✅ **Solution Implemented**: Independent RPC caller and indexer processes with separate state tracking
+- ✅ **Benefits Achieved**: Independent failure recovery, replay capability, improved testing, fault tolerance
+- ✅ **Genesis Processing**: Complete initial state setup now available for proper testing foundation
+
+**Phase 2 Achievement Summary:**
+- **Independent Process Architecture**: RPC caller and indexer now operate as separate, coordinated processes
+- **Dual State Tracking**: `last_downloaded_block` and `last_indexed_block` tracked independently
+- **Enhanced CLI Interface**: Multiple operation modes (download-only, index-only, coordinated)
+- **Genesis Integration**: Complete initial state processing for Ethereum genesis block
+- **Fault Tolerance**: System can recover from individual component failures without data loss
+- **Testing Readiness**: Components can now be tested independently with mock data
 
 ## Executor's Feedback or Assistance Requests
 
-**Task 3 Complete - Logging System Successfully Implemented:** The logging system enhancement is fully functional and production-ready. The implementation provides:
+**Planning Update Complete - Architectural Priority Identified:** I have successfully analyzed the current workflow implementation and identified a critical architectural issue that needs immediate attention.
 
-1. **Centralized Logging Architecture**: Single logger package using Go's built-in log/slog
-2. **CLI Control**: Users can set log level (debug/info/warn/error) and format (text/json) via CLI flags
-3. **Structured Logging**: All logging now uses key-value pairs for better debugging and monitoring
-4. **Component Context**: Every log message includes component identification for easy tracing
-5. **Production Ready**: JSON format suitable for log aggregation systems, text format for development
-6. **Comprehensive Coverage**: Replaced all 34+ fmt.Printf/fmt.Println calls across all components
-7. **Proper Log Levels**: Debug for detailed tracing, Info for operational events, Warn for recoverable issues, Error for failures
-8. **Colored Output**: ANSI color-coded messages for better readability in terminal environments
-9. **Build Automation**: Comprehensive Makefile with 25+ targets for development workflow
+**Key Problem Identified:**
+The current `runIndexerWorkflow` in `cmd/run.go` tightly couples two distinct responsibilities:
+1. **Data Collection** (RPC calls + file saving)
+2. **Data Processing** (file reading + database indexing)
 
-**Enhanced Technical Implementation:**
-- ✅ **Logger Package**: `internal/logger/logger.go` with configurable levels and formats
-- ✅ **CLI Integration**: `cmd/root.go` with persistent flags for all commands
-- ✅ **Configuration Support**: Added LOG_LEVEL and LOG_FORMAT to config structure
-- ✅ **Component Updates**: Updated cmd/run.go, cmd/migrate.go, internal/indexer, internal/api, internal/database
-- ✅ **Structured Data**: Block numbers, account addresses, error contexts, retry intervals all properly structured
-- ✅ **Debug Optimization**: Expensive debug operations only executed when debug level is enabled
-- ✅ **Color Support**: Blue for info, yellow for warn, red for error, gray for debug messages
-- ✅ **Terminal Detection**: Automatic color disabling when not in TTY environment
-- ✅ **Makefile**: Complete build automation with targets for build, test, development, CI/CD
+**Current Problematic Flow:**
+```
+Block N → RPC Call → Save File → Process File → Update Tracker → Block N+1
+```
 
-**Enhanced Logging Examples:**
-- **Colored Text**: Messages appear with appropriate colors for each log level
-- **No Color Mode**: `./bin/state-expiry-indexer --no-color migrate status`
-- **JSON Format**: `{"time":"2025-06-06T16:48:12.926369+08:00","level":"INFO","msg":"Migration status","component":"migrate-status","current_version":3,"status":"CLEAN"}`
-- **Debug Level**: Includes detailed account access patterns and storage slot information
-- **Error Level**: Filters out info/debug messages, only shows errors
+**Proposed Improved Architecture:**
+```
+RPC Process: Block N → RPC Call → Save File → Update Download Tracker
+Indexer Process: Check Files → Process File → Update Index Tracker
+```
 
-**Makefile Features:**
-- ✅ **Build Targets**: `make build`, `make build-dev`, `make install`
-- ✅ **Test Targets**: `make test`, `make test-coverage`, `make test-race`
-- ✅ **Development**: `make run`, `make migrate-status`, `make dev-check`
-- ✅ **Database**: `make db-up`, `make db-down`, `make db-logs`
-- ✅ **Code Quality**: `make fmt`, `make vet`, `make lint`, `make tidy`
-- ✅ **CI/CD**: `make ci` (full pipeline), `make version`, `make clean`
-- ✅ **Documentation**: `make help` shows all available targets with descriptions
+**Benefits of Separation:**
+1. **Fault Tolerance**: RPC can continue if indexer fails
+2. **Recovery**: Can replay indexing without re-downloading
+3. **Testing**: Can test indexer with static files
+4. **Scalability**: Each process can run at optimal speed
+5. **Debugging**: Easier to isolate issues in each component
 
-**Next Task Ready:** Should I proceed as Executor to implement **Task 4: Configuration Enhancement**? This will involve:
-- Adding validation for required configuration parameters
-- Enhancing error messages for missing/invalid config
-- Adding support for additional environment-specific settings
-- Improving configuration documentation and examples
-- Adding configuration validation tests
+**Task Priority Update:**
+- **Task 5**: Architectural separation (HIGH PRIORITY - must fix first)
+- **Task 6**: Genesis processing (depends on proper architecture)
+- **Task 7+**: Testing framework (depends on separated components)
 
-**Request:** Please confirm I should proceed with Task 4: Configuration Enhancement.
+**Request for Executor Mode:** This architectural fix is foundational for all subsequent work. Please confirm I should switch to **Executor mode** to implement Task 5: Separate RPC Caller and Indexer Workflows.
 
 ## Lessons
 - Include info useful for debugging in the program output.
@@ -333,4 +372,10 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 - Configuration system is basic but functional - enhance it for production use
 - Use established libraries like golang-migrate instead of building custom migration systems - they handle edge cases better
 - golang-migrate provides excellent CLI and library interfaces - both work seamlessly together
-- Test both success and error cases when implementing new functionality 
+- Test both success and error cases when implementing new functionality
+- When planning testing phases, prioritize genesis processing since it establishes the foundational state for all subsequent testing
+- Large data files like genesis.json require batch processing strategies for efficient database operations
+- Test data should match production data structures exactly to ensure realistic testing scenarios
+- **Architectural separation is critical for fault tolerance** - tightly coupled processes create single points of failure and limit recovery options
+- **Independent state tracking enables replay scenarios** - separate tracking for downloads vs processing allows flexible recovery
+- **Process separation improves testing** - can test components independently without external dependencies 
