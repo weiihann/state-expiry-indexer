@@ -29,12 +29,13 @@ type Service struct {
 }
 
 func NewService(client *rpc.Client, fileStore *storage.FileStore, config internal.Config) *Service {
+	log := logger.GetLogger("rpc-caller")
 	return &Service{
 		client:          client,
 		fileStore:       fileStore,
 		downloadTracker: tracker.NewDownloadTracker(),
 		config:          config,
-		log:             logger.GetLogger("rpc-caller"),
+		log:             log,
 	}
 }
 
@@ -94,6 +95,9 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 		"to_block", finalizedBlock,
 		"total_blocks", finalizedBlock-lastDownloadedBlock)
 
+	lastProgressTime := time.Now()
+	lastProgressBlock := lastDownloadedBlock
+
 	for i := lastDownloadedBlock + 1; i <= finalizedBlock; i++ {
 		select {
 		case <-ctx.Done():
@@ -110,6 +114,20 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 			s.log.Error("Could not update last downloaded block",
 				"block_number", i,
 				"error", err)
+		}
+
+		// Show simple progress every 1000 blocks or 8 seconds
+		now := time.Now()
+		blocksSinceProgress := i - lastProgressBlock
+		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
+
+		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
+			s.log.Info("Download progress",
+				"current_block", i,
+				"target_block", finalizedBlock,
+				"remaining", finalizedBlock-i)
+			lastProgressTime = now
+			lastProgressBlock = i
 		}
 
 		s.log.Debug("Successfully downloaded block",

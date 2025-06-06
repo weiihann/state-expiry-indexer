@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:13
+    image: postgres:16.1
     container_name: state-expiry-db
     environment:
       POSTGRES_USER: user
@@ -10,6 +10,33 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+  test-database:
+    image: postgres:16.1
+    environment:
+      POSTGRES_DB: test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      PGDATA: /pgtmpfs
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "pg_isready",
+          "-d",
+          "explorer",
+          "-U",
+          "explorer",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    restart: on-failure
+    stdin_open: true
+    tty: true
+    tmpfs:
+      - /pgtmpfs
 
 volumes:
   postgres_data: 

@@ -19,3 +19,4 @@ configs/config.env.local
 data/
 .last_processed_block 
 *.env
+bin
