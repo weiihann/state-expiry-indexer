@@ -125,55 +125,6 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	return nil
 }
 
-func (s *Service) Run(ctx context.Context, endBlock uint64) error {
-	start, err := s.repo.GetLastIndexedBlock(ctx)
-	if err != nil {
-		return fmt.Errorf("could not get last processed block: %w", err)
-	}
-
-	s.log.Info("Starting indexer service",
-		"start_block", start,
-		"end_block", endBlock,
-		"total_blocks", endBlock-start+1)
-
-	if start == 0 {
-		if err := s.indexer.ProcessGenesis(ctx); err != nil {
-			return fmt.Errorf("could not process genesis: %w", err)
-		}
-		s.log.Info("Successfully processed genesis")
-		start = 1
-	}
-
-	lastProgressTime := time.Now()
-	lastProgressBlock := start - 1
-
-	for blockNumber := start; blockNumber <= endBlock; blockNumber++ {
-		s.log.Debug("Processing block", "block_number", blockNumber)
-		if err := s.indexer.ProcessBlock(ctx, blockNumber); err != nil {
-			return fmt.Errorf("could not process block %d: %w", blockNumber, err)
-		}
-
-		// Show simple progress every 1000 blocks or 8 seconds
-		now := time.Now()
-		blocksSinceProgress := blockNumber - lastProgressBlock
-		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
-
-		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
-			s.log.Info("Index progress",
-				"current_block", blockNumber,
-				"target_block", endBlock,
-				"remaining", endBlock-blockNumber)
-			lastProgressTime = now
-			lastProgressBlock = blockNumber
-		}
-	}
-
-	s.log.Info("Indexer finished processing all blocks in range",
-		"start_block", start,
-		"end_block", endBlock)
-	return nil
-}
-
 // ProcessBlock processes a single block through the indexer
 func (s *Service) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	return s.indexer.ProcessBlock(ctx, blockNumber)

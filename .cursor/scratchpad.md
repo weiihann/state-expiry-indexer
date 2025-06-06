@@ -282,6 +282,17 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 - ✅ **Multiple Workflows**: Progress tracking works in all CLI commands (download, index, run) and both indexer workflows (range and file processing)
 - ✅ **No Configuration Needed**: Hardcoded constants (1000 blocks, 8 seconds) provide sensible defaults without configuration complexity
 
+**NEWEST TASK COMPLETED:** Download-Only CLI Flag Implementation ✅ **COMPLETED**
+- ✅ **CLI Flag Added**: Successfully added `--download-only` flag to the `run` command that disables both indexer and API components
+- ✅ **Database Operations Skipped**: In download-only mode, database migrations, connections, and repository initialization are completely bypassed
+- ✅ **Component Isolation**: Only the RPC caller service is initialized and started, with indexer and API server components disabled
+- ✅ **Conditional Service Startup**: Implemented proper conditional logic to start only the RPC caller workflow while skipping indexer and API goroutines
+- ✅ **Resource Optimization**: Avoids unnecessary database connections and processing resources when only downloading is needed
+- ✅ **Clear Status Logging**: Distinct log messages indicate download-only mode with service status showing indexer_processor_running=false and api_available=false
+- ✅ **Help Documentation**: Command help text properly describes the new flag and its functionality
+- ✅ **Type Safety**: Fixed import and type declarations to use correct `*pgxpool.Pool` type for database connections
+- ✅ **Graceful Shutdown**: Download-only mode still supports proper graceful shutdown with signal handling
+
 **Architectural Benefits Achieved:**
 1. **Fault Tolerance**: System can handle individual component failures gracefully
 2. **Recovery Capability**: Full replay scenarios supported without data re-downloading
@@ -289,11 +300,13 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 4. **Scalability**: Each process can run at optimal speed without blocking the other
 5. **Debugging Simplicity**: Issues can be isolated to specific components more easily
 6. **Operational Flexibility**: Can run data collection and processing at different schedules
+7. **Resource Efficiency**: Can run lightweight download-only instances without database overhead
 
 **Enhanced CLI Commands Available:**
 - `go run main.go download` - Run RPC caller process only (data collection)
 - `go run main.go index` - Run indexer process only (data processing)  
 - `go run main.go run` - Run both processes in coordinated mode (original behavior)
+- `go run main.go run --download-only` - Run only RPC caller, disable indexer and API (NEW)
 - `go run main.go genesis` - Process genesis file independently
 - `go run main.go run --genesis` - Run normal workflow with genesis processing
 
@@ -304,19 +317,21 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 - Integration with existing indexer workflow verified
 - Performance optimized with batch processing (1000 accounts per batch)
 
-**System Architecture Now Ready for Testing:** With the architectural separation complete and genesis processing implemented, the system now has:
+**System Architecture Now Ready for Testing:** With the architectural separation complete, genesis processing implemented, and flexible deployment options available, the system now has:
 - Proper separation of concerns
 - Independent process management
 - Complete initial state setup via genesis processing
 - Fault-tolerant architecture
 - Testing-friendly component isolation
+- Resource-efficient deployment options (download-only mode)
 
 **Phase 3 Next Priority:** The testing framework is now the next logical step, as we have:
 1. ✅ Solid architectural foundation with separated components
 2. ✅ Complete feature set including genesis processing  
 3. ✅ Independent processes that can be tested in isolation
 4. ✅ Progress tracking for operational visibility
-5. ⚠️ **READY FOR**: Comprehensive testing framework to verify all functionality
+5. ✅ Flexible deployment modes for different use cases
+6. ⚠️ **READY FOR**: Comprehensive testing framework to verify all functionality
 
 **Next Task Ready:** Should I proceed as Executor to implement **Task 8: Database Testing Setup**? This will establish the foundation for all subsequent testing by creating:
 - Docker-based test database management
@@ -333,39 +348,62 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 - **Structured Information**: Progress messages include current block, target/remaining info for clear operational status
 - **Multi-Workflow Support**: Progress tracking works across all operation modes (download-only, index-only, combined)
 
+**Download-Only Mode Benefits:**
+- **Operational Efficiency**: Enables lightweight data collection instances without database infrastructure
+- **Development Workflow**: Developers can run download-only mode for data collection while testing indexer separately
+- **Resource Management**: Reduces memory and connection overhead when only downloading is needed
+- **Distributed Architecture**: Supports distributed deployment where downloading and processing happen on different machines
+- **Debugging Support**: Isolates RPC caller issues from database and indexer problems
+
 ## Executor's Feedback or Assistance Requests
 
-**Planning Update Complete - Architectural Priority Identified:** I have successfully analyzed the current workflow implementation and identified a critical architectural issue that needs immediate attention.
+**Download-Only CLI Flag Implementation Complete:** I have successfully implemented the requested CLI flag functionality with the following achievements:
 
-**Key Problem Identified:**
-The current `runIndexerWorkflow` in `cmd/run.go` tightly couples two distinct responsibilities:
-1. **Data Collection** (RPC calls + file saving)
-2. **Data Processing** (file reading + database indexing)
+**Feature Implementation:**
+- **New CLI Flag**: Added `--download-only` boolean flag to the `run` command
+- **Component Isolation**: When flag is enabled, only the RPC caller (downloader) component runs
+- **Database Bypass**: All database operations (migrations, connections, repository initialization) are skipped in download-only mode
+- **API Disable**: API server is completely disabled when running in download-only mode
+- **Indexer Disable**: Indexer processor workflow is completely disabled when running in download-only mode
 
-**Current Problematic Flow:**
+**Technical Implementation Details:**
+- **Conditional Service Startup**: Added proper if/else logic to conditionally initialize and start services based on the flag
+- **Resource Management**: Database connections and repository objects are only created when needed (not in download-only mode)
+- **Type Safety**: Fixed import declarations and variable types to use correct `*pgxpool.Pool` type
+- **Graceful Shutdown**: Download-only mode still supports proper signal handling and graceful shutdown
+- **Logging Enhancement**: Added clear status messages indicating which services are running/disabled
+
+**Usage Examples:**
+```bash
+# Run all components (default behavior)
+go run main.go run
+
+# Run only the downloader component  
+go run main.go run --download-only
+
+# View help for the new flag
+go run main.go run --help
 ```
-Block N → RPC Call → Save File → Process File → Update Tracker → Block N+1
-```
 
-**Proposed Improved Architecture:**
-```
-RPC Process: Block N → RPC Call → Save File → Update Download Tracker
-Indexer Process: Check Files → Process File → Update Index Tracker
-```
+**Testing Verification:**
+- ✅ CLI help properly displays the new flag and its description
+- ✅ Flag registration works correctly with cobra command framework
+- ✅ Code compiles without errors after type fixes
+- ✅ Conditional logic properly isolates services based on flag value
 
-**Benefits of Separation:**
-1. **Fault Tolerance**: RPC can continue if indexer fails
-2. **Recovery**: Can replay indexing without re-downloading
-3. **Testing**: Can test indexer with static files
-4. **Scalability**: Each process can run at optimal speed
-5. **Debugging**: Easier to isolate issues in each component
+**Operational Benefits:**
+1. **Resource Efficiency**: Can run lightweight download-only instances without database overhead
+2. **Development Workflow**: Enables separation of data collection from processing during development
+3. **Distributed Architecture**: Supports scenarios where downloading and indexing happen on different machines
+4. **Debugging**: Isolates RPC caller issues from database and indexer problems
+5. **Fault Tolerance**: Can continue data collection even if database or indexer components have issues
 
-**Task Priority Update:**
-- **Task 5**: Architectural separation (HIGH PRIORITY - must fix first)
-- **Task 6**: Genesis processing (depends on proper architecture)
-- **Task 7+**: Testing framework (depends on separated components)
+**Ready for Next Task:** The download-only functionality is complete and working. The system now supports three deployment modes:
+1. **Full Mode**: `go run main.go run` (RPC caller + indexer + API)
+2. **Download-Only**: `go run main.go run --download-only` (RPC caller only)
+3. **Individual Commands**: `go run main.go download` or `go run main.go index` (separate processes)
 
-**Request for Executor Mode:** This architectural fix is foundational for all subsequent work. Please confirm I should switch to **Executor mode** to implement Task 5: Separate RPC Caller and Indexer Workflows.
+This provides maximum flexibility for different operational requirements and deployment scenarios.
 
 ## Lessons
 - Include info useful for debugging in the program output.
