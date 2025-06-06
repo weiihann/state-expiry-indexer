@@ -37,7 +37,7 @@ func NewIndexer(path string, repo *repository.StateRepository) *Indexer {
 
 func NewService(path string, repo *repository.StateRepository, startBlock uint64) *Service {
 	return &Service{
-		indexer:      NewIndexer(filepath.Join(path, "statediffs"), repo),
+		indexer:      NewIndexer(path, repo),
 		repo:         repo,
 		progressFile: filepath.Join(path, "last_processed_block.txt"),
 		startBlock:   startBlock,

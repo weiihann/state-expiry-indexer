@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -14,8 +16,9 @@ import (
 )
 
 type Server struct {
-	repo *repository.StateRepository
-	log  *slog.Logger
+	repo   *repository.StateRepository
+	log    *slog.Logger
+	server *http.Server
 }
 
 func NewServer(repo *repository.StateRepository) *Server {
@@ -25,7 +28,7 @@ func NewServer(repo *repository.StateRepository) *Server {
 	}
 }
 
-func (s *Server) Run(port int) error {
+func (s *Server) Run(ctx context.Context, port int) error {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -38,8 +41,35 @@ func (s *Server) Run(port int) error {
 		r.Get("/lookup", s.handleStateLookup)
 	})
 
-	s.log.Info("Starting API server", "port", port, "address", fmt.Sprintf(":%d", port))
-	return http.ListenAndServe(fmt.Sprintf(":%d", port), r)
+	s.server = &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: r,
+	}
+
+	s.log.Info("Starting API server", "port", port, "address", s.server.Addr)
+
+	// Start server in a goroutine
+	go func() {
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.log.Error("API server listen error", "error", err)
+		}
+	}()
+
+	// Wait for context cancellation
+	<-ctx.Done()
+
+	// Graceful shutdown with timeout
+	s.log.Info("Shutting down API server...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := s.server.Shutdown(shutdownCtx); err != nil {
+		s.log.Error("API server shutdown error", "error", err)
+		return err
+	}
+
+	s.log.Info("API server stopped gracefully")
+	return nil
 }
 
 func (s *Server) handleGetExpiredStateCount(w http.ResponseWriter, r *http.Request) {

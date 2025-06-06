@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -26,8 +25,6 @@ import (
 
 const (
 	FinalizedBlockOffset = 64
-	PollInterval         = 10 * time.Second
-	DefaultAPIPort       = 8080
 )
 
 var runCmd = &cobra.Command{
@@ -37,17 +34,22 @@ var runCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		log := logger.GetLogger("run-cmd")
 
-		// Load configuration
+		// Load configuration with enhanced validation
 		config, err := internal.LoadConfig("./configs")
 		if err != nil {
-			log.Error("Failed to load configuration", "error", err)
+			log.Error("Configuration validation failed", "error", err)
 			os.Exit(1)
 		}
 
-		// Set default API port if not configured
-		if config.APIPort == 0 {
-			config.APIPort = DefaultAPIPort
-		}
+		log.Info("Configuration loaded successfully",
+			"environment", config.Environment,
+			"api_port", config.APIPort,
+			"api_host", config.APIHost,
+			"data_dir", config.DataDir,
+			"block_batch_size", config.BlockBatchSize,
+			"poll_interval", config.PollInterval,
+			"db_max_conns", config.DBMaxConns,
+			"db_min_conns", config.DBMinConns)
 
 		// Run database migrations
 		log.Info("Checking database migrations...")
@@ -71,29 +73,29 @@ var runCmd = &cobra.Command{
 		repo := repository.NewStateRepository(db)
 
 		// Initialize RPC client
-		log.Info("Initializing RPC client...", "rpc_url", config.RPCURL)
+		log.Info("Initializing RPC client...", "rpc_url", config.RPCURL, "timeout", config.RPCTimeout)
 		client, err := rpc.NewClient(ctx, config.RPCURL)
 		if err != nil {
 			log.Error("Failed to create RPC client", "error", err, "rpc_url", config.RPCURL)
 			os.Exit(1)
 		}
 
-		// Initialize file storage
-		log.Info("Initializing file storage...", "path", "data/statediffs")
-		fileStore, err := storage.NewFileStore("data/statediffs")
+		// Initialize file storage using config paths
+		log.Info("Initializing file storage...", "path", config.DataDir)
+		fileStore, err := storage.NewFileStore(config.DataDir)
 		if err != nil {
-			log.Error("Failed to create file store", "error", err, "path", "data/statediffs")
+			log.Error("Failed to create file store", "error", err, "path", config.DataDir)
 			os.Exit(1)
 		}
 
 		// Initialize block tracker
 		blockTracker := tracker.NewTracker()
 
-		// Initialize indexer service
-		indexerSvc := indexer.NewService("data", repo, 0)
+		// Initialize indexer service using config paths
+		indexerSvc := indexer.NewService(config.DataDir, repo, 0)
 
 		// Initialize API server
-		log.Info("Initializing API server...", "port", config.APIPort)
+		log.Info("Initializing API server...", "host", config.APIHost, "port", config.APIPort)
 		apiServer := api.NewServer(repo)
 
 		// Setup graceful shutdown
@@ -109,20 +111,21 @@ var runCmd = &cobra.Command{
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			log.Info("Starting API server", "port", config.APIPort)
 
-			if err := apiServer.Run(config.APIPort); err != nil {
+			if err := apiServer.Run(ctx, config.APIPort); err != nil {
 				log.Error("API server error", "error", err, "port", config.APIPort)
 			}
 		}()
 
-		// Start indexer workflow in goroutine
+		// Start indexer workflow in goroutine with config
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			log.Info("Starting indexer workflow...")
+			log.Info("Starting indexer workflow...",
+				"poll_interval", config.PollInterval,
+				"block_batch_size", config.BlockBatchSize)
 
-			if err := runIndexerWorkflow(ctx, client, fileStore, blockTracker, indexerSvc); err != nil {
+			if err := runIndexerWorkflow(ctx, config, client, fileStore, blockTracker, indexerSvc); err != nil {
 				log.Error("Indexer workflow error", "error", err)
 			}
 			log.Info("Indexer workflow stopped")
@@ -130,7 +133,9 @@ var runCmd = &cobra.Command{
 
 		log.Info("All services started successfully",
 			"api_port", config.APIPort,
-			"api_url", "http://localhost:"+strconv.Itoa(config.APIPort))
+			"api_url", fmt.Sprintf("http://%s:%d", config.APIHost, config.APIPort),
+			"environment", config.Environment,
+			"data_dir", config.DataDir)
 		log.Info("Services running", "api_available", true, "indexer_running", true)
 		log.Info("Press Ctrl+C to stop all services")
 
@@ -146,8 +151,11 @@ var runCmd = &cobra.Command{
 }
 
 // runIndexerWorkflow handles the main indexing loop
-func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *storage.FileStore, blockTracker *tracker.Tracker, indexerSvc *indexer.Service) error {
+func runIndexerWorkflow(ctx context.Context, config internal.Config, client *rpc.Client, fileStore *storage.FileStore, blockTracker *tracker.Tracker, indexerSvc *indexer.Service) error {
 	log := logger.GetLogger("indexer-workflow")
+
+	// Use config values instead of constants
+	pollInterval := time.Duration(config.PollInterval) * time.Second
 
 	for {
 		select {
@@ -161,8 +169,8 @@ func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *stor
 		if err != nil {
 			log.Warn("Could not get last processed block, retrying...",
 				"error", err,
-				"retry_interval", PollInterval)
-			time.Sleep(PollInterval)
+				"retry_interval", pollInterval)
+			time.Sleep(pollInterval)
 			continue
 		}
 
@@ -170,8 +178,8 @@ func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *stor
 		if err != nil {
 			log.Warn("Could not get latest block number, retrying...",
 				"error", err,
-				"retry_interval", PollInterval)
-			time.Sleep(PollInterval)
+				"retry_interval", pollInterval)
+			time.Sleep(pollInterval)
 			continue
 		}
 
@@ -180,8 +188,9 @@ func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *stor
 		if lastProcessedBlock >= finalizedBlock {
 			log.Debug("Caught up to finalized block, waiting for new blocks...",
 				"finalized_block", finalizedBlock,
-				"last_processed", lastProcessedBlock)
-			time.Sleep(PollInterval)
+				"last_processed", lastProcessedBlock,
+				"poll_interval", pollInterval)
+			time.Sleep(pollInterval)
 			continue
 		}
 
@@ -208,8 +217,8 @@ func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *stor
 				log.Warn("Could not get state diff for block, retrying...",
 					"block_number", i,
 					"error", err,
-					"retry_interval", PollInterval)
-				time.Sleep(PollInterval)
+					"retry_interval", pollInterval)
+				time.Sleep(pollInterval)
 				i-- // Retry the same block
 				continue
 			}
@@ -229,37 +238,40 @@ func runIndexerWorkflow(ctx context.Context, client *rpc.Client, fileStore *stor
 					"block_number", i,
 					"filename", filename,
 					"error", err,
-					"retry_interval", PollInterval)
-				time.Sleep(PollInterval)
+					"retry_interval", pollInterval)
+				time.Sleep(pollInterval)
 				i-- // Retry the same block
 				continue
 			}
 
-			// Process the saved file through indexer
-			if err := indexerSvc.ProcessBlock(context.Background(), i); err != nil {
-				log.Warn("Could not process block through indexer, retrying...",
+			// Process state diff through indexer
+			if err := indexerSvc.ProcessBlock(ctx, uint64(i)); err != nil {
+				log.Warn("Could not process block, retrying...",
 					"block_number", i,
 					"error", err,
-					"retry_interval", PollInterval)
-				time.Sleep(PollInterval)
+					"retry_interval", pollInterval)
+				time.Sleep(pollInterval)
 				i-- // Retry the same block
 				continue
 			}
 
-			// Update block tracker
-			if err := blockTracker.SetLastProcessedBlock(i); err != nil {
-				log.Warn("Could not set last processed block, retrying...",
+			// Update last processed block
+			if err := blockTracker.SetLastProcessedBlock(uint64(i)); err != nil {
+				log.Error("Could not update last processed block",
 					"block_number", i,
-					"error", err,
-					"retry_interval", PollInterval)
-				time.Sleep(PollInterval)
-				i-- // Retry the same block
+					"error", err)
 				continue
 			}
 
-			log.Info("Successfully processed and indexed block",
-				"block_number", i)
+			log.Debug("Successfully processed block",
+				"block_number", i,
+				"filename", filename)
 		}
+
+		log.Info("Completed block range processing",
+			"from_block", lastProcessedBlock+1,
+			"to_block", finalizedBlock,
+			"processed_blocks", finalizedBlock-lastProcessedBlock)
 	}
 }
 
