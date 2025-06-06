@@ -6,16 +6,19 @@ import (
 	"strings"
 )
 
-const lastProcessedBlockFile = "data/.last_processed_block"
+const (
+	lastDownloadedBlockFile = "data/.last_downloaded_block" // For RPC caller tracking
+)
 
-type Tracker struct{}
+// DownloadTracker tracks the last successfully downloaded block
+type DownloadTracker struct{}
 
-func NewTracker() *Tracker {
-	return &Tracker{}
+func NewDownloadTracker() *DownloadTracker {
+	return &DownloadTracker{}
 }
 
-func (t *Tracker) GetLastProcessedBlock() (uint64, error) {
-	data, err := os.ReadFile(lastProcessedBlockFile)
+func (t *DownloadTracker) GetLastDownloadedBlock() (uint64, error) {
+	data, err := os.ReadFile(lastDownloadedBlockFile)
 	if os.IsNotExist(err) {
 		return 0, nil // If file doesn't exist, start from block 0
 	}
@@ -29,7 +32,7 @@ func (t *Tracker) GetLastProcessedBlock() (uint64, error) {
 	return lastBlock, nil
 }
 
-func (t *Tracker) SetLastProcessedBlock(blockNumber uint64) error {
+func (t *DownloadTracker) SetLastDownloadedBlock(blockNumber uint64) error {
 	data := []byte(strconv.FormatUint(blockNumber, 10))
-	return os.WriteFile(lastProcessedBlockFile, data, 0o644)
+	return os.WriteFile(lastDownloadedBlockFile, data, 0o644)
 }

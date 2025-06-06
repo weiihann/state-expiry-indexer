@@ -37,10 +37,10 @@ type DiffItem struct {
 
 // AccountDiff represents the changes to a single account
 type AccountDiff struct {
-	Balance interface{} `json:"balance,omitempty"`
-	Code    interface{} `json:"code,omitempty"`
-	Nonce   interface{} `json:"nonce,omitempty"`
-	Storage interface{} `json:"storage,omitempty"`
+	Balance any `json:"balance,omitempty"`
+	Code    any `json:"code,omitempty"`
+	Nonce   any `json:"nonce,omitempty"`
+	Storage any `json:"storage,omitempty"`
 }
 
 // StateDiff represents the state diff for a single transaction
