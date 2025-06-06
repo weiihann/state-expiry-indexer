@@ -1,0 +1,21 @@
+# Local configuration files
+configs/config.env.local
+
+# Binaries
+*.out
+*.exe
+
+# IDE files
+.idea/
+.vscode/
+
+# OS-specific files
+.DS_Store
+
+# Go build cache
+/vendor/
+/Godeps/
+
+data/
+.last_processed_block 
+*.env
