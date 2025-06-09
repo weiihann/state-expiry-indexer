@@ -126,8 +126,8 @@ var runCmd = &cobra.Command{
 			go func() {
 				defer wg.Done()
 
-				if err := apiServer.Run(ctx, config.APIPort); err != nil {
-					log.Error("API server error", "error", err, "port", config.APIPort)
+				if err := apiServer.Run(ctx, config.APIHost, config.APIPort); err != nil {
+					log.Error("API server error", "error", err, "host", config.APIHost, "port", config.APIPort)
 				}
 			}()
 		}

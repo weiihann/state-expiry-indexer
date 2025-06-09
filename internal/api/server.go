@@ -28,7 +28,7 @@ func NewServer(repo *repository.StateRepository) *Server {
 	}
 }
 
-func (s *Server) Run(ctx context.Context, port int) error {
+func (s *Server) Run(ctx context.Context, host string, port int) error {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -42,11 +42,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	})
 
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf("%s:%d", host, port),
 		Handler: r,
 	}
 
-	s.log.Info("Starting API server", "port", port, "address", s.server.Addr)
+	s.log.Info("Starting API server", "host", host, "port", port, "address", s.server.Addr)
 
 	// Start server in a goroutine
 	go func() {
