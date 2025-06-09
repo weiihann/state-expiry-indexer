@@ -22,14 +22,14 @@ const (
 
 // Service handles RPC calls and file storage for state diffs
 type Service struct {
-	client          *rpc.Client
+	client          []*rpc.Client
 	fileStore       *storage.FileStore
 	downloadTracker *tracker.DownloadTracker
 	config          internal.Config
 	log             *slog.Logger
 }
 
-func NewService(client *rpc.Client, fileStore *storage.FileStore, config internal.Config) *Service {
+func NewService(client []*rpc.Client, fileStore *storage.FileStore, config internal.Config) *Service {
 	log := logger.GetLogger("rpc-caller")
 	return &Service{
 		client:          client,
@@ -77,7 +77,7 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 		return fmt.Errorf("could not get last downloaded block: %w", err)
 	}
 
-	latestBlock, err := s.client.GetLatestBlockNumber(ctx)
+	latestBlock, err := s.client[0].GetLatestBlockNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("could not get latest block number: %w", err)
 	}
@@ -147,12 +147,20 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	blockNum := big.NewInt(int64(blockNumber))
 
-	// Create a timeout context for the RPC call
-	timeoutCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-	defer cancel()
+	// Download state diff from RPC with per-call timeout
+	var err error
+	var stateDiff []rpc.TransactionResult
+	for _, client := range s.client {
+		// Create a fresh timeout context for each RPC call
+		timeoutCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
+		stateDiff, err = client.GetStateDiff(timeoutCtx, blockNum)
+		cancel() // Always cancel to release resources
 
-	// Download state diff from RPC with timeout
-	stateDiff, err := s.client.GetStateDiff(timeoutCtx, blockNum)
+		if err == nil {
+			break
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("could not get state diff: %w", err)
 	}
