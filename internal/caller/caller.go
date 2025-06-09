@@ -17,6 +17,7 @@ import (
 
 const (
 	FinalizedBlockOffset = 64
+	rpcTimeout           = 1 * time.Minute
 )
 
 // Service handles RPC calls and file storage for state diffs
@@ -146,8 +147,12 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	blockNum := big.NewInt(int64(blockNumber))
 
-	// Download state diff from RPC
-	stateDiff, err := s.client.GetStateDiff(ctx, blockNum)
+	// Create a timeout context for the RPC call
+	timeoutCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+
+	// Download state diff from RPC with timeout
+	stateDiff, err := s.client.GetStateDiff(timeoutCtx, blockNum)
 	if err != nil {
 		return fmt.Errorf("could not get state diff: %w", err)
 	}
