@@ -22,6 +22,7 @@ type Config struct {
 
 	// RPC configuration
 	RPCURL     string `mapstructure:"RPC_URL"`
+	RPCURL2    string `mapstructure:"RPC_URL_2"`
 	RPCTimeout int    `mapstructure:"RPC_TIMEOUT_SECONDS"`
 
 	// API Server configuration
