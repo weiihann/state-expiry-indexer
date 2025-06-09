@@ -43,6 +43,9 @@ type Config struct {
 
 	// Runtime environment
 	Environment string `mapstructure:"ENVIRONMENT"`
+
+	// Block configuration
+	StartBlock uint64 `mapstructure:"START_BLOCK"`
 }
 
 // ValidationError represents configuration validation errors

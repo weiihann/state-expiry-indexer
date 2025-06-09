@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/weiihann/state-expiry-indexer/internal"
@@ -27,16 +28,34 @@ type Service struct {
 	downloadTracker *tracker.DownloadTracker
 	config          internal.Config
 	log             *slog.Logger
+	startBlock      uint64
 }
 
 func NewService(client []*rpc.Client, fileStore *storage.FileStore, config internal.Config) *Service {
 	log := logger.GetLogger("rpc-caller")
+
+	// Filter out nil clients and validate we have at least one
+	validClients := make([]*rpc.Client, 0, len(client))
+	for _, c := range client {
+		if c != nil {
+			validClients = append(validClients, c)
+		}
+	}
+
+	if len(validClients) == 0 {
+		log.Error("No valid RPC clients provided")
+		return nil
+	}
+
+	log.Info("RPC caller service initialized", "valid_clients", len(validClients))
+
 	return &Service{
-		client:          client,
+		client:          validClients,
 		fileStore:       fileStore,
 		downloadTracker: tracker.NewDownloadTracker(),
 		config:          config,
 		log:             log,
+		startBlock:      config.StartBlock,
 	}
 }
 
@@ -72,73 +91,48 @@ func (s *Service) Run(ctx context.Context) error {
 
 // downloadNewBlocks downloads state diffs for new blocks
 func (s *Service) downloadNewBlocks(ctx context.Context) error {
-	lastDownloadedBlock, err := s.downloadTracker.GetLastDownloadedBlock()
-	if err != nil {
-		return fmt.Errorf("could not get last downloaded block: %w", err)
+	if s.startBlock == 0 {
+		latestBlock, err := s.client[0].GetLatestBlockNumber(ctx)
+		if err != nil {
+			return fmt.Errorf("could not get latest block number: %w", err)
+		}
+
+		s.startBlock = latestBlock.Uint64()
 	}
 
-	latestBlock, err := s.client[0].GetLatestBlockNumber(ctx)
-	if err != nil {
-		return fmt.Errorf("could not get latest block number: %w", err)
+	count := 0
+	logged := time.Now()
+	logProgress := func() {
+		count++
+		if time.Since(logged) > 5*time.Second {
+			s.log.Info("Download progress", "cycle_count", count, "elapsed", time.Since(logged).Seconds())
+			logged = time.Now()
+			count = 0
+		}
 	}
 
-	finalizedBlock := latestBlock.Uint64() - FinalizedBlockOffset
-
-	if lastDownloadedBlock >= finalizedBlock {
-		s.log.Debug("Caught up to finalized block, waiting for new blocks...",
-			"finalized_block", finalizedBlock,
-			"last_downloaded", lastDownloadedBlock)
-		return nil
-	}
-
-	s.log.Info("Downloading block range",
-		"from_block", lastDownloadedBlock+1,
-		"to_block", finalizedBlock,
-		"total_blocks", finalizedBlock-lastDownloadedBlock)
-
-	lastProgressTime := time.Now()
-	lastProgressBlock := lastDownloadedBlock
-
-	for i := lastDownloadedBlock + 1; i <= finalizedBlock; i++ {
+	for i := s.startBlock; ; i-- {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
 
+		// Skip if the block file already exists
+		if _, err := os.Stat(blockFile(i)); err == nil {
+			continue
+		}
+
 		if err := s.downloadBlock(ctx, i); err != nil {
 			return fmt.Errorf("failed to download block %d: %w", i, err)
 		}
 
-		// Update progress tracker
-		if err := s.downloadTracker.SetLastDownloadedBlock(i); err != nil {
-			s.log.Error("Could not update last downloaded block",
-				"block_number", i,
-				"error", err)
+		logProgress()
+
+		if i == 0 {
+			break
 		}
-
-		// Show simple progress every 1000 blocks or 8 seconds
-		now := time.Now()
-		blocksSinceProgress := i - lastProgressBlock
-		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
-
-		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
-			s.log.Info("Download progress",
-				"current_block", i,
-				"target_block", finalizedBlock,
-				"remaining", finalizedBlock-i)
-			lastProgressTime = now
-			lastProgressBlock = i
-		}
-
-		s.log.Debug("Successfully downloaded block",
-			"block_number", i)
 	}
-
-	s.log.Info("Completed block range download",
-		"from_block", lastDownloadedBlock+1,
-		"to_block", finalizedBlock,
-		"downloaded_blocks", finalizedBlock-lastDownloadedBlock)
 
 	return nil
 }
@@ -151,6 +145,12 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	var err error
 	var stateDiff []rpc.TransactionResult
 	for _, client := range s.client {
+		// Skip nil clients as a defensive measure
+		if client == nil {
+			s.log.Warn("Skipping nil RPC client", "block_number", blockNumber)
+			continue
+		}
+
 		// Create a fresh timeout context for each RPC call
 		timeoutCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 		stateDiff, err = client.GetStateDiff(timeoutCtx, blockNum)
@@ -159,10 +159,16 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 		if err == nil {
 			break
 		}
+		s.log.Debug("RPC call failed, trying next client", "error", err, "block_number", blockNumber)
 	}
 
 	if err != nil {
 		return fmt.Errorf("could not get state diff: %w", err)
+	}
+
+	// Check if we actually got any results (all clients might have failed)
+	if stateDiff == nil {
+		return fmt.Errorf("no state diff obtained - all RPC clients failed or unavailable")
 	}
 
 	// Marshal to JSON
@@ -178,6 +184,10 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	}
 
 	return nil
+}
+
+func blockFile(blockNumber uint64) string {
+	return fmt.Sprintf("%d.json", blockNumber)
 }
 
 // GetLastDownloadedBlock returns the last successfully downloaded block

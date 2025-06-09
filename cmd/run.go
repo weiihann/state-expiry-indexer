@@ -46,7 +46,8 @@ var runCmd = &cobra.Command{
 			"poll_interval", config.PollInterval,
 			"db_max_conns", config.DBMaxConns,
 			"db_min_conns", config.DBMinConns,
-			"download_only", downloadOnly)
+			"download_only", downloadOnly,
+			"start_block", config.StartBlock)
 
 		// Skip database operations in download-only mode
 		if !downloadOnly {
@@ -88,14 +89,22 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		var client2 *rpc.Client
+		// Initialize list of clients, starting with the primary client
+		clients := []*rpc.Client{client}
+
+		// Try to initialize second RPC client if configured
 		if config.RPCURL2 != "" {
-			log.Info("Initializing RPC client...", "rpc_url", config.RPCURL2, "timeout", config.RPCTimeout)
-			client2, err = rpc.NewClient(ctx, config.RPCURL2)
+			log.Info("Initializing secondary RPC client...", "rpc_url", config.RPCURL2, "timeout", config.RPCTimeout)
+			client2, err := rpc.NewClient(ctx, config.RPCURL2)
 			if err != nil {
-				log.Error("Failed to create RPC client", "error", err, "rpc_url", config.RPCURL2)
+				log.Warn("Failed to create secondary RPC client, continuing with primary only", "error", err, "rpc_url", config.RPCURL2)
+			} else {
+				clients = append(clients, client2)
+				log.Info("Secondary RPC client initialized successfully")
 			}
 		}
+
+		log.Info("RPC clients initialized", "client_count", len(clients))
 
 		// Initialize file storage using config paths
 		log.Info("Initializing file storage...", "path", config.DataDir)
@@ -106,7 +115,11 @@ var runCmd = &cobra.Command{
 		}
 
 		// Initialize RPC caller service (always needed)
-		rpcCallerSvc := caller.NewService([]*rpc.Client{client, client2}, fileStore, config)
+		rpcCallerSvc := caller.NewService(clients, fileStore, config)
+		if rpcCallerSvc == nil {
+			log.Error("Failed to initialize RPC caller service: no valid clients")
+			os.Exit(1)
+		}
 
 		// Initialize services only if not in download-only mode
 		var indexerSvc *indexer.Service
