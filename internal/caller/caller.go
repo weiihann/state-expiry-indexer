@@ -102,10 +102,10 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 
 	count := 0
 	logged := time.Now()
-	logProgress := func() {
+	logProgress := func(i uint64) {
 		count++
 		if time.Since(logged) > 5*time.Second {
-			s.log.Info("Download progress", "cycle_count", count, "elapsed", time.Since(logged).Seconds())
+			s.log.Info("Download progress", "last_block", i, "cycle_count", count, "elapsed", time.Since(logged).Seconds())
 			logged = time.Now()
 			count = 0
 		}
@@ -127,7 +127,7 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 			return fmt.Errorf("failed to download block %d: %w", i, err)
 		}
 
-		logProgress()
+		logProgress(i)
 
 		if i == 0 {
 			break
