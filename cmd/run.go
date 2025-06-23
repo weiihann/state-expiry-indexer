@@ -82,11 +82,13 @@ var runCmd = &cobra.Command{
 
 		// Initialize RPC client
 		log.Info("Initializing RPC client...", "rpc_url", config.RPCURL, "timeout", config.RPCTimeout)
+		var clients []*rpc.Client
 		client, err := rpc.NewClient(ctx, config.RPCURL)
 		if err != nil {
 			log.Error("Failed to create RPC client", "error", err, "rpc_url", config.RPCURL)
 			os.Exit(1)
 		}
+		clients = append(clients, client)
 
 		var client2 *rpc.Client
 		if config.RPCURL2 != "" {
@@ -95,6 +97,7 @@ var runCmd = &cobra.Command{
 			if err != nil {
 				log.Error("Failed to create RPC client", "error", err, "rpc_url", config.RPCURL2)
 			}
+			clients = append(clients, client2)
 		}
 
 		// Initialize file storage using config paths
@@ -106,7 +109,7 @@ var runCmd = &cobra.Command{
 		}
 
 		// Initialize RPC caller service (always needed)
-		rpcCallerSvc := caller.NewService([]*rpc.Client{client, client2}, fileStore, config)
+		rpcCallerSvc := caller.NewService(clients, fileStore, config)
 
 		// Initialize services only if not in download-only mode
 		var indexerSvc *indexer.Service
