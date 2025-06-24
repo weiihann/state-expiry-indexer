@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/weiihann/state-expiry-indexer/internal"
@@ -147,6 +148,14 @@ func (s *Service) downloadNewBlocks(ctx context.Context) error {
 func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	blockNum := big.NewInt(int64(blockNumber))
 
+	// Check if block is already downloaded
+	filename := fmt.Sprintf("%d.json", blockNumber)
+	if _, err := os.Stat(filename); err == nil {
+		s.log.Debug("Block already downloaded, skipping...",
+			"block_number", blockNumber)
+		return nil
+	}
+
 	// Download state diff from RPC with per-call timeout
 	var err error
 	var stateDiff []rpc.TransactionResult
@@ -172,7 +181,6 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	}
 
 	// Save to file
-	filename := fmt.Sprintf("%d.json", blockNumber)
 	if err := s.fileStore.Save(filename, data); err != nil {
 		return fmt.Errorf("could not save state diff file %s: %w", filename, err)
 	}
