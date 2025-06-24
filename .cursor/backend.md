@@ -9,6 +9,8 @@ The State Expiry Indexer is a comprehensive system designed to track and analyze
 - How many states are expired?
 - What are the top 10 expired contracts ordered by size (number of storage slots)?
 - What is the last accessed block number for any given state?
+- How many contract accounts are expired?
+- How many EOA accounts are expired?
 
 ### Current Status
 Based on analysis of the codebase, significant progress has been made by previous Planner and Executor:

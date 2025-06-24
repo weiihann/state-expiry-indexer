@@ -9,6 +9,7 @@ CREATE DOMAIN eth_slotkey AS BYTEA
 CREATE TABLE accounts_current (
   address           eth_address   NOT NULL,
   last_access_block BIGINT        NOT NULL,
+  is_contract       BOOLEAN,
   CONSTRAINT pk_accounts_current PRIMARY KEY (address)
 )
 PARTITION BY HASH (address);

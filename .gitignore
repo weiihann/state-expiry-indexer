@@ -20,3 +20,4 @@ data/
 .last_processed_block 
 *.env
 bin
+CLAUDE.local.md
