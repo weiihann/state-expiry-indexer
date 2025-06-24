@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/weiihann/state-expiry-indexer/internal"
@@ -150,7 +151,8 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 
 	// Check if block is already downloaded
 	filename := fmt.Sprintf("%d.json", blockNumber)
-	if _, err := os.Stat(filename); err == nil {
+	filePath := filepath.Join(s.config.DataDir, filename)
+	if _, err := os.Stat(filePath); err == nil {
 		s.log.Debug("Block already downloaded, skipping...",
 			"block_number", blockNumber)
 		return nil
