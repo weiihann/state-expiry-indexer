@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: state_expiry
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
   test-database:
@@ -18,7 +18,7 @@ services:
       POSTGRES_PASSWORD: test
       PGDATA: /pgtmpfs
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     healthcheck:
       test:
         [
