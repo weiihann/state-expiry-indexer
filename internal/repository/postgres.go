@@ -15,6 +15,12 @@ type Contract struct {
 	SlotCount int    `json:"slot_count"`
 }
 
+type Account struct {
+	Address         string `json:"address"`
+	LastAccessBlock uint64 `json:"last_access_block"`
+	IsContract      *bool  `json:"is_contract,omitempty"`
+}
+
 type StateRepository struct {
 	db *pgxpool.Pool
 }
@@ -50,7 +56,7 @@ func (r *StateRepository) updateLastIndexedBlockInTx(ctx context.Context, tx pgx
 	return nil
 }
 
-func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber uint64, accounts map[string]struct{}, storage map[string]map[string]struct{}) error {
+func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber uint64, accounts map[string]bool, storage map[string]map[string]struct{}) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("could not begin transaction: %w", err)
@@ -72,7 +78,7 @@ func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber u
 	return tx.Commit(ctx)
 }
 
-func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, accounts map[string]struct{}) error {
+func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, accounts map[string]bool) error {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -80,14 +86,14 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	var values []any
 	var placeholders []string
 	i := 1
-	for acc := range accounts {
+	for acc, isContract := range accounts {
 		addr, err := utils.HexToBytes(acc)
 		if err != nil {
 			continue
 		}
-		placeholders = append(placeholders, fmt.Sprintf("($%d, $%d)", i, i+1))
-		values = append(values, addr, blockNumber)
-		i += 2
+		placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", i, i+1, i+2))
+		values = append(values, addr, blockNumber, isContract)
+		i += 3
 	}
 
 	if len(placeholders) == 0 {
@@ -95,10 +101,11 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	}
 
 	sql := `
-		INSERT INTO accounts_current (address, last_access_block)
+		INSERT INTO accounts_current (address, last_access_block, is_contract)
 		VALUES %s
 		ON CONFLICT (address) DO UPDATE
-		SET last_access_block = EXCLUDED.last_access_block
+		SET last_access_block = EXCLUDED.last_access_block,
+		    is_contract = COALESCE(accounts_current.is_contract, EXCLUDED.is_contract)
 		WHERE accounts_current.last_access_block < EXCLUDED.last_access_block;
 	`
 	query := fmt.Sprintf(sql, strings.Join(placeholders, ","))
@@ -245,4 +252,86 @@ func (r *StateRepository) GetStateLastAccessedBlock(ctx context.Context, address
 	}
 
 	return lastAccessBlock, nil
+}
+
+func (r *StateRepository) GetAccountType(ctx context.Context, address string) (*bool, error) {
+	addressBytes, err := utils.HexToBytes(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address hex: %w", err)
+	}
+
+	var isContract *bool
+	query := `SELECT is_contract FROM accounts_current WHERE address = $1;`
+	err = r.db.QueryRow(ctx, query, addressBytes).Scan(&isContract)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil // Account not found
+		}
+		return nil, fmt.Errorf("could not get account type: %w", err)
+	}
+
+	return isContract, nil
+}
+
+func (r *StateRepository) GetAccountInfo(ctx context.Context, address string) (*Account, error) {
+	addressBytes, err := utils.HexToBytes(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address hex: %w", err)
+	}
+
+	var account Account
+	var isContract *bool
+	var lastAccessBlock uint64
+	query := `SELECT last_access_block, is_contract FROM accounts_current WHERE address = $1;`
+	err = r.db.QueryRow(ctx, query, addressBytes).Scan(&lastAccessBlock, &isContract)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil // Account not found
+		}
+		return nil, fmt.Errorf("could not get account info: %w", err)
+	}
+
+	account.Address = address
+	account.LastAccessBlock = lastAccessBlock
+	account.IsContract = isContract
+
+	return &account, nil
+}
+
+func (r *StateRepository) GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error) {
+	var query string
+	var args []any
+
+	if isContract == nil {
+		query = `SELECT address, last_access_block, is_contract FROM accounts_current WHERE last_access_block < $1;`
+		args = []any{expiryBlock}
+	} else {
+		query = `SELECT address, last_access_block, is_contract FROM accounts_current WHERE last_access_block < $1 AND is_contract = $2;`
+		args = []any{expiryBlock, *isContract}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("could not query expired accounts by type: %w", err)
+	}
+	defer rows.Close()
+
+	var accounts []Account
+	for rows.Next() {
+		var account Account
+		var addressBytes []byte
+		var isContractVal *bool
+		if err := rows.Scan(&addressBytes, &account.LastAccessBlock, &isContractVal); err != nil {
+			return nil, fmt.Errorf("could not scan account row: %w", err)
+		}
+		account.Address = utils.BytesToHex(addressBytes)
+		account.IsContract = isContractVal
+		accounts = append(accounts, account)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over account rows: %w", err)
+	}
+
+	return accounts, nil
 }

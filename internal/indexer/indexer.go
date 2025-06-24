@@ -50,9 +50,11 @@ func NewService(path string, repo *repository.StateRepository, config internal.C
 func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 	genesis := core.DefaultGenesisBlock()
 
-	accessedAccounts := make(map[string]struct{}, len(genesis.Alloc))
-	for acc := range genesis.Alloc {
-		accessedAccounts[acc.String()] = struct{}{}
+	accessedAccounts := make(map[string]bool, len(genesis.Alloc))
+	for acc, alloc := range genesis.Alloc {
+		// Check if this genesis account has code (is a contract)
+		isContract := len(alloc.Code) > 0
+		accessedAccounts[acc.String()] = isContract
 	}
 
 	return i.repo.UpdateBlockDataInTx(ctx, 0, accessedAccounts, nil)
@@ -74,12 +76,14 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 
 	i.log.Debug("Processing block", "block_number", blockNumber, "transaction_count", len(stateDiffs))
 
-	accessedAccounts := make(map[string]struct{})
+	accessedAccounts := make(map[string]bool)
 	accessedStorage := make(map[string]map[string]struct{})
 
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
-			accessedAccounts[addr] = struct{}{} // Any appearance in the state diff means the account was accessed
+			// Determine if this account is a contract based on state diff
+			isContract := i.determineAccountType(diff)
+			accessedAccounts[addr] = isContract
 
 			if diff.Storage != nil {
 				if _, ok := accessedStorage[addr]; !ok {
@@ -123,6 +127,24 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	i.log.Debug("Successfully updated block data", "block_number", blockNumber)
 
 	return nil
+}
+
+// determineAccountType analyzes the account diff to determine if it's a contract
+func (i *Indexer) determineAccountType(diff rpc.AccountDiff) bool {
+	// If the account has code changes, it's definitely a contract
+	if diff.Code != nil {
+		return true
+	}
+
+	// If the account has storage changes, it's likely a contract
+	// EOAs don't have storage slots
+	if diff.Storage != nil {
+		return true
+	}
+
+	// If only balance/nonce changes, we can't definitively determine the type
+	// Return false (EOA) as the default assumption since most accounts are EOAs
+	return false
 }
 
 // ProcessBlock processes a single block through the indexer
