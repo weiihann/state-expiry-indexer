@@ -48,7 +48,7 @@ func verify(cmd *cobra.Command, args []string) {
 }
 
 func init() {
-	verifyCmd.Flags().Uint64Var(&startBlock, "start-block", 0, "Start block")
-	verifyCmd.Flags().Uint64Var(&endBlock, "end-block", 0, "End block")
+	verifyCmd.Flags().Uint64Var(&startBlock, "start-block", 1, "Start block")
+	verifyCmd.Flags().Uint64Var(&endBlock, "end-block", 1, "End block")
 	rootCmd.AddCommand(verifyCmd)
 }
