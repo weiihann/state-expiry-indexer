@@ -37,5 +37,5 @@ func (t *DownloadTracker) GetLastDownloadedBlock() (uint64, error) {
 
 func (t *DownloadTracker) SetLastDownloadedBlock(blockNumber uint64) error {
 	data := []byte(strconv.FormatUint(blockNumber, 10))
-	return os.WriteFile(LastDownloadedBlockFile, data, 0o644)
+	return os.WriteFile(filepath.Join(t.dir, LastDownloadedBlockFile), data, 0o644)
 }
