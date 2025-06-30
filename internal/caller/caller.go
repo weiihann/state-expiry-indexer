@@ -36,7 +36,7 @@ func NewService(client []*rpc.Client, fileStore *storage.FileStore, config inter
 	return &Service{
 		client:          client,
 		fileStore:       fileStore,
-		downloadTracker: tracker.NewDownloadTracker(),
+		downloadTracker: tracker.NewDownloadTracker(config.DataDir),
 		config:          config,
 		log:             log,
 	}

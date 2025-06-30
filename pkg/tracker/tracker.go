@@ -2,23 +2,26 @@ package tracker
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 const (
-	LastDownloadedBlockFile = "data/.last_downloaded_block" // For RPC caller tracking
+	LastDownloadedBlockFile = ".last_downloaded_block" // For RPC caller tracking
 )
 
 // DownloadTracker tracks the last successfully downloaded block
-type DownloadTracker struct{}
+type DownloadTracker struct {
+	dir string
+}
 
-func NewDownloadTracker() *DownloadTracker {
-	return &DownloadTracker{}
+func NewDownloadTracker(dir string) *DownloadTracker {
+	return &DownloadTracker{dir: dir}
 }
 
 func (t *DownloadTracker) GetLastDownloadedBlock() (uint64, error) {
-	data, err := os.ReadFile(LastDownloadedBlockFile)
+	data, err := os.ReadFile(filepath.Join(t.dir, LastDownloadedBlockFile))
 	if os.IsNotExist(err) {
 		return 0, nil // If file doesn't exist, start from block 0
 	}
