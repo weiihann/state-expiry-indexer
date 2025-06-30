@@ -46,6 +46,7 @@ type AccountDiff struct {
 // StateDiff represents the state diff for a single transaction
 type TransactionResult struct {
 	StateDiff map[string]AccountDiff `json:"stateDiff"`
+	TxHash    string                 `json:"transactionHash"`
 }
 
 func (c *Client) GetStateDiff(ctx context.Context, blockNumber *big.Int) ([]TransactionResult, error) {
