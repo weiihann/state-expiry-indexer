@@ -82,8 +82,7 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
 			// Determine if this account is a contract based on state diff
-			isContract := i.determineAccountType(diff)
-			accessedAccounts[addr] = isContract
+			accessedAccounts[addr] = i.determineAccountType(diff)
 
 			if diff.Storage != nil {
 				if _, ok := accessedStorage[addr]; !ok {
@@ -133,17 +132,11 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 func (i *Indexer) determineAccountType(diff rpc.AccountDiff) bool {
 	// If the account has code changes, it's definitely a contract
 	if diff.Code != nil {
-		return true
+		if _, ok := diff.Code.(map[string]any); ok {
+			return true
+		}
 	}
 
-	// If the account has storage changes, it's likely a contract
-	// EOAs don't have storage slots
-	if diff.Storage != nil {
-		return true
-	}
-
-	// If only balance/nonce changes, we can't definitively determine the type
-	// Return false (EOA) as the default assumption since most accounts are EOAs
 	return false
 }
 
