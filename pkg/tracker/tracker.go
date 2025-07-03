@@ -13,15 +13,15 @@ const (
 
 // DownloadTracker tracks the last successfully downloaded block
 type DownloadTracker struct {
-	dir string
+	filePath string
 }
 
 func NewDownloadTracker(dir string) *DownloadTracker {
-	return &DownloadTracker{dir: dir}
+	return &DownloadTracker{filePath: filepath.Join(dir, LastDownloadedBlockFile)}
 }
 
 func (t *DownloadTracker) GetLastDownloadedBlock() (uint64, error) {
-	data, err := os.ReadFile(filepath.Join(t.dir, LastDownloadedBlockFile))
+	data, err := os.ReadFile(t.filePath)
 	if os.IsNotExist(err) {
 		return 0, nil // If file doesn't exist, start from block 0
 	}
@@ -37,5 +37,5 @@ func (t *DownloadTracker) GetLastDownloadedBlock() (uint64, error) {
 
 func (t *DownloadTracker) SetLastDownloadedBlock(blockNumber uint64) error {
 	data := []byte(strconv.FormatUint(blockNumber, 10))
-	return os.WriteFile(filepath.Join(t.dir, LastDownloadedBlockFile), data, 0o644)
+	return os.WriteFile(t.filePath, data, 0o644)
 }
