@@ -129,6 +129,12 @@ func performCompression(log *slog.Logger, dataDir string, files []string) compre
 	stats := compressionStats{totalFiles: len(files)}
 	lastProgressTime := time.Now()
 	lastProgressCount := 0
+	encoder, err := utils.NewZstdEncoder()
+	if err != nil {
+		log.Error("Failed to create zstd encoder", "error", err)
+		os.Exit(1)
+	}
+	defer encoder.Close()
 
 	for i, file := range files {
 		// Progress reporting every 1000 files or 30 seconds
@@ -162,7 +168,7 @@ func performCompression(log *slog.Logger, dataDir string, files []string) compre
 		}
 
 		// Compress the data
-		compressedData, err := utils.CompressJSON(originalData)
+		compressedData, err := encoder.Compress(originalData)
 		if err != nil {
 			log.Error("Failed to compress file", "file", file, "error", err)
 			stats.failedFiles++

@@ -42,6 +42,9 @@ type Config struct {
 
 	// Runtime environment
 	Environment string `mapstructure:"ENVIRONMENT"`
+
+	// Compression configuration
+	CompressionEnabled bool `mapstructure:"COMPRESSION_ENABLED"`
 }
 
 // ValidationError represents configuration validation errors
@@ -138,6 +141,9 @@ func setDefaults() {
 
 	// Runtime defaults
 	viper.SetDefault("ENVIRONMENT", "development")
+
+	// Compression defaults
+	viper.SetDefault("COMPRESSION_ENABLED", true)
 }
 
 func validateConfig(config Config) error {
