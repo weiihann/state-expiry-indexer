@@ -49,26 +49,28 @@ func (s *Service) Run(ctx context.Context) error {
 		"finalized_block_offset", FinalizedBlockOffset)
 
 	pollInterval := time.Duration(s.config.PollInterval) * time.Second
-
 	for {
 		select {
 		case <-ctx.Done():
 			s.log.Info("RPC caller workflow stopped")
 			return nil
 		default:
-			// Continue with download logic
 		}
 
+		// Run download logic
 		if err := s.downloadNewBlocks(ctx); err != nil {
-			s.log.Warn("Download cycle failed, retrying...",
+			s.log.Warn("Download cycle failed, will retry...",
 				"error", err,
 				"retry_interval", pollInterval)
-			time.Sleep(pollInterval)
-			continue
 		}
 
-		// Wait before next polling cycle
-		time.Sleep(pollInterval)
+		// Wait for next poll or cancellation
+		select {
+		case <-ctx.Done():
+			s.log.Info("RPC caller workflow stopped")
+			return nil
+		case <-time.After(pollInterval):
+		}
 	}
 }
 
