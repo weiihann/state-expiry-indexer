@@ -35,9 +35,16 @@ func verify(cmd *cobra.Command, args []string) {
 
 	missingBlocks := []uint64{}
 	for i := startBlock; i <= endBlock; i++ {
-		if _, err := os.Stat(filepath.Join(config.DataDir, fmt.Sprintf("%d.json", i))); os.IsNotExist(err) {
-			missingBlocks = append(missingBlocks, i)
-			log.Error("State diff not found", "block", i)
+		filePath := filepath.Join(config.DataDir, fmt.Sprintf("%d.json", i))
+		compressedFilePath := filepath.Join(config.DataDir, fmt.Sprintf("%d.json.zst", i))
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			if _, err := os.Stat(compressedFilePath); os.IsNotExist(err) {
+				missingBlocks = append(missingBlocks, i)
+				log.Error("State diff not found", "block", i)
+			} else if err != nil {
+				log.Error("Failed to check state diff file", "error", err, "block", i)
+				os.Exit(1)
+			}
 		} else if err != nil {
 			log.Error("Failed to check state diff file", "error", err, "block", i)
 			os.Exit(1)

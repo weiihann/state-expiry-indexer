@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	compressStartBlock uint64
-	compressEndBlock   uint64
-	compressAll        bool
-	compressDryRun     bool
-	compressOverwrite  bool
+	compressStartBlock     uint64
+	compressEndBlock       uint64
+	compressAll            bool
+	compressDryRun         bool
+	compressOverwrite      bool
+	compressDeleteOriginal bool
 )
 
 var compressCmd = &cobra.Command{
@@ -101,7 +102,7 @@ func compress(cmd *cobra.Command, args []string) {
 	}
 
 	// Perform actual compression
-	compressionStats := performCompression(log, config.DataDir, filesToCompress)
+	compressionStats := performCompression(log, config.DataDir, filesToCompress, compressDeleteOriginal)
 
 	// Log final statistics
 	log.Info("Compression completed successfully",
@@ -125,7 +126,7 @@ type compressionStats struct {
 	compressionRatio float64
 }
 
-func performCompression(log *slog.Logger, dataDir string, files []string) compressionStats {
+func performCompression(log *slog.Logger, dataDir string, files []string, deleteOriginal bool) compressionStats {
 	stats := compressionStats{totalFiles: len(files)}
 	lastProgressTime := time.Now()
 	lastProgressCount := 0
@@ -156,6 +157,15 @@ func performCompression(log *slog.Logger, dataDir string, files []string) compre
 		if _, err := os.Stat(compressedFile); err == nil && !compressOverwrite {
 			log.Debug("Skipping file (already compressed)", "file", file)
 			stats.skippedFiles++
+			if deleteOriginal {
+				if _, err := os.Stat(filepath.Join(dataDir, file)); err == nil {
+					if err := os.Remove(filepath.Join(dataDir, file)); err != nil {
+						log.Error("Failed to delete original file", "file", file, "error", err)
+						stats.failedFiles++
+						continue
+					}
+				}
+			}
 			continue
 		}
 
@@ -181,6 +191,14 @@ func performCompression(log *slog.Logger, dataDir string, files []string) compre
 			log.Error("Failed to write compressed file", "file", compressedFile, "error", err)
 			stats.failedFiles++
 			continue
+		}
+
+		if deleteOriginal {
+			if err := os.Remove(filepath.Join(dataDir, file)); err != nil {
+				log.Error("Failed to delete original file", "file", file, "error", err)
+				stats.failedFiles++
+				continue
+			}
 		}
 
 		// Update statistics
@@ -247,6 +265,7 @@ func init() {
 	compressCmd.Flags().BoolVar(&compressAll, "all", false, "Compress all JSON files in the data directory")
 	compressCmd.Flags().BoolVar(&compressDryRun, "dry-run", false, "Preview what would be compressed without actually doing it")
 	compressCmd.Flags().BoolVar(&compressOverwrite, "overwrite", false, "Overwrite existing .json.zst files")
+	compressCmd.Flags().BoolVar(&compressDeleteOriginal, "delete", false, "Delete original JSON files after compression")
 
 	// Mark flags as mutually exclusive
 	compressCmd.MarkFlagsMutuallyExclusive("all", "start-block")
