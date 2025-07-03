@@ -6,48 +6,56 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// CompressJSON compresses JSON data using zstd compression with default settings.
-// It takes raw JSON bytes and returns compressed data suitable for .zst files.
-// Uses the default compression level which provides a good balance between
-// compression ratio and speed.
-func CompressJSON(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("cannot compress empty data")
-	}
+type ZstdEncoder struct {
+	encoder *zstd.Encoder
+}
 
-	// Create zstd encoder with default settings
+func NewZstdEncoder() (*ZstdEncoder, error) {
 	encoder, err := zstd.NewWriter(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zstd encoder: %w", err)
 	}
-	defer encoder.Close()
+	return &ZstdEncoder{encoder: encoder}, nil
+}
 
-	// Compress the data
-	compressed := encoder.EncodeAll(data, nil)
+func (c *ZstdEncoder) Close() error {
+	return c.encoder.Close()
+}
+
+func (c *ZstdEncoder) Compress(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("cannot compress empty data")
+	}
+
+	compressed := c.encoder.EncodeAll(data, nil)
 	if len(compressed) == 0 {
 		return nil, fmt.Errorf("compression failed: output is empty")
 	}
-
 	return compressed, nil
 }
 
-// DecompressJSON decompresses zstd-compressed JSON data back to original format.
-// It takes compressed .zst data and returns the original JSON bytes.
-// This function performs decompression entirely in memory without creating temporary files.
-func DecompressJSON(compressedData []byte) ([]byte, error) {
-	if len(compressedData) == 0 {
-		return nil, fmt.Errorf("cannot decompress empty data")
-	}
+type ZstdDecoder struct {
+	decoder *zstd.Decoder
+}
 
-	// Create zstd decoder
+func NewZstdDecoder() (*ZstdDecoder, error) {
 	decoder, err := zstd.NewReader(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zstd decoder: %w", err)
 	}
-	defer decoder.Close()
+	return &ZstdDecoder{decoder: decoder}, nil
+}
 
-	// Decompress the data
-	decompressed, err := decoder.DecodeAll(compressedData, nil)
+func (c *ZstdDecoder) Close() {
+	c.decoder.Close()
+}
+
+func (c *ZstdDecoder) Decompress(compressedData []byte) ([]byte, error) {
+	if len(compressedData) == 0 {
+		return nil, fmt.Errorf("cannot decompress empty data")
+	}
+
+	decompressed, err := c.decoder.DecodeAll(compressedData, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decompress data: %w", err)
 	}

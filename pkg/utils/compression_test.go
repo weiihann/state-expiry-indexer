@@ -75,7 +75,12 @@ func TestCompressJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compressed, err := CompressJSON(tt.data)
+			encoder, err := NewZstdEncoder()
+			if err != nil {
+				t.Fatalf("failed to create zstd encoder: %v", err)
+			}
+			defer encoder.Close()
+			compressed, err := encoder.Compress(tt.data)
 
 			if tt.expectError {
 				if err == nil {
@@ -106,7 +111,12 @@ func TestCompressJSON(t *testing.T) {
 func TestCompressJSONDefaultLevel(t *testing.T) {
 	data := []byte(sampleStateDiffJSON)
 
-	compressed, err := CompressJSON(data)
+	encoder, err := NewZstdEncoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+	compressed, err := encoder.Compress(data)
 	if err != nil {
 		t.Fatalf("compression failed: %v", err)
 	}
@@ -127,7 +137,12 @@ func TestCompressJSONDefaultLevel(t *testing.T) {
 		len(data), len(compressed), ratio)
 
 	// Verify we can decompress it back
-	decompressed, err := DecompressJSON(compressed)
+	decoder, err := NewZstdDecoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd decoder: %v", err)
+	}
+	defer decoder.Close()
+	decompressed, err := decoder.Decompress(compressed)
 	if err != nil {
 		t.Fatalf("failed to decompress: %v", err)
 	}
@@ -141,7 +156,12 @@ func TestDecompressJSON(t *testing.T) {
 	originalData := []byte(sampleStateDiffJSON)
 
 	// First compress the data
-	compressed, err := CompressJSON(originalData)
+	encoder, err := NewZstdEncoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+	compressed, err := encoder.Compress(originalData)
 	if err != nil {
 		t.Fatalf("failed to compress test data: %v", err)
 	}
@@ -180,7 +200,12 @@ func TestDecompressJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decompressed, err := DecompressJSON(tt.data)
+			decoder, err := NewZstdDecoder()
+			if err != nil {
+				t.Fatalf("failed to create zstd decoder: %v", err)
+			}
+			defer decoder.Close()
+			decompressed, err := decoder.Decompress(tt.data)
 
 			if tt.expectError {
 				if err == nil {
@@ -215,13 +240,23 @@ func TestCompressionRoundTrip(t *testing.T) {
 	for i, data := range testData {
 		t.Run(string(rune('A'+i)), func(t *testing.T) {
 			// Compress
-			compressed, err := CompressJSON(data)
+			encoder, err := NewZstdEncoder()
+			if err != nil {
+				t.Fatalf("failed to create zstd encoder: %v", err)
+			}
+			defer encoder.Close()
+			compressed, err := encoder.Compress(data)
 			if err != nil {
 				t.Fatalf("compression failed: %v", err)
 			}
 
 			// Decompress
-			decompressed, err := DecompressJSON(compressed)
+			decoder, err := NewZstdDecoder()
+			if err != nil {
+				t.Fatalf("failed to create zstd decoder: %v", err)
+			}
+			defer decoder.Close()
+			decompressed, err := decoder.Decompress(compressed)
 			if err != nil {
 				t.Fatalf("decompression failed: %v", err)
 			}
@@ -266,7 +301,12 @@ func TestGetCompressionRatio(t *testing.T) {
 func TestValidateCompressedData(t *testing.T) {
 	// Create valid compressed data
 	validData := []byte(sampleStateDiffJSON)
-	compressed, err := CompressJSON(validData)
+	encoder, err := NewZstdEncoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+	compressed, err := encoder.Compress(validData)
 	if err != nil {
 		t.Fatalf("failed to create test compressed data: %v", err)
 	}
@@ -359,12 +399,22 @@ func TestCompressionWithRealStateDataStructure(t *testing.T) {
 	}
 
 	// Test compression and decompression
-	compressed, err := CompressJSON(jsonData)
+	encoder, err := NewZstdEncoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd encoder: %v", err)
+	}
+	defer encoder.Close()
+	compressed, err := encoder.Compress(jsonData)
 	if err != nil {
 		t.Fatalf("compression failed: %v", err)
 	}
 
-	decompressed, err := DecompressJSON(compressed)
+	decoder, err := NewZstdDecoder()
+	if err != nil {
+		t.Fatalf("failed to create zstd decoder: %v", err)
+	}
+	defer decoder.Close()
+	decompressed, err := decoder.Decompress(compressed)
 	if err != nil {
 		t.Fatalf("decompression failed: %v", err)
 	}
