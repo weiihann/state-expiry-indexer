@@ -101,12 +101,13 @@ func run(cmd *cobra.Command, args []string) {
 	}
 
 	// Initialize file storage using config paths
-	log.Info("Initializing file storage...", "path", config.DataDir)
-	fileStore, err := storage.NewFileStore(config.DataDir)
+	log.Info("Initializing file storage...", "path", config.DataDir, "compression_enabled", config.CompressionEnabled)
+	fileStore, err := storage.NewFileStoreWithCompression(config.DataDir, config.CompressionEnabled)
 	if err != nil {
 		log.Error("Failed to create file store", "error", err, "path", config.DataDir)
 		os.Exit(1)
 	}
+	defer fileStore.Close()
 
 	// Initialize RPC caller service (always needed)
 	rpcCallerSvc := caller.NewService(clients, fileStore, config)

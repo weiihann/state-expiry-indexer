@@ -152,8 +152,16 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 	// Check if block is already downloaded
 	filename := fmt.Sprintf("%d.json", blockNumber)
 	filePath := filepath.Join(s.config.DataDir, filename)
+	compressedFilePath := filepath.Join(s.config.DataDir, filename+".zst")
+
+	// Check for existing files - either uncompressed or compressed
 	if _, err := os.Stat(filePath); err == nil {
-		s.log.Debug("Block already downloaded, skipping...",
+		s.log.Debug("Block already downloaded (uncompressed), skipping...",
+			"block_number", blockNumber)
+		return nil
+	}
+	if _, err := os.Stat(compressedFilePath); err == nil {
+		s.log.Debug("Block already downloaded (compressed), skipping...",
 			"block_number", blockNumber)
 		return nil
 	}
@@ -182,9 +190,23 @@ func (s *Service) downloadBlock(ctx context.Context, blockNumber uint64) error {
 		return fmt.Errorf("could not marshal state diff: %w", err)
 	}
 
-	// Save to file
-	if err := s.fileStore.Save(filename, data); err != nil {
-		return fmt.Errorf("could not save state diff file %s: %w", filename, err)
+	// Save to file - use compression if enabled
+	if s.config.CompressionEnabled {
+		if err := s.fileStore.SaveCompressed(filename, data); err != nil {
+			return fmt.Errorf("could not save compressed state diff file %s: %w", filename, err)
+		}
+		s.log.Debug("Successfully saved compressed block",
+			"block_number", blockNumber,
+			"filename", filename+".zst",
+			"original_size", len(data))
+	} else {
+		if err := s.fileStore.Save(filename, data); err != nil {
+			return fmt.Errorf("could not save state diff file %s: %w", filename, err)
+		}
+		s.log.Debug("Successfully saved uncompressed block",
+			"block_number", blockNumber,
+			"filename", filename,
+			"size", len(data))
 	}
 
 	return nil
