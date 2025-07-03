@@ -21,9 +21,8 @@ type Config struct {
 	DBMinConns int    `mapstructure:"DB_MIN_CONNS"`
 
 	// RPC configuration
-	RPCURL     string `mapstructure:"RPC_URL"`
-	RPCURL2    string `mapstructure:"RPC_URL_2"`
-	RPCTimeout int    `mapstructure:"RPC_TIMEOUT_SECONDS"`
+	RPCURLS    []string `mapstructure:"RPC_URLS"`
+	RPCTimeout int      `mapstructure:"RPC_TIMEOUT_SECONDS"`
 
 	// API Server configuration
 	APIPort int    `mapstructure:"API_PORT"`
@@ -145,9 +144,9 @@ func validateConfig(config Config) error {
 	var errors ValidationErrors
 
 	// Required fields validation
-	if config.RPCURL == "" {
+	if len(config.RPCURLS) == 0 {
 		errors = append(errors, ValidationError{
-			Field:   "RPC_URL",
+			Field:   "RPC_URLS",
 			Message: "RPC URL is required for connecting to Ethereum node",
 		})
 	}
