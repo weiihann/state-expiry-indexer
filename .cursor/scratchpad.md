@@ -268,9 +268,56 @@ COMPRESSION_ENABLED=false go run main.go run
 - **Safety**: Preserves existing files and prevents duplicate downloads
 - **Operational Visibility**: Detailed logging for monitoring compression operations
 
-**Ready for Next Task:** Task 12 - **Dual-Format Indexer Support**
+**Task 12 Completed Successfully:** Dual-Format Indexer Support ✅ **COMPLETED**
 
-The RPC caller now automatically compresses new state diff files when enabled. The next task will update the indexer to intelligently handle both `.json` and `.json.zst` files during processing.
+**Dual-Format Indexer Implementation Complete:**
+- ✅ **Smart File Detection**: Updated `ProcessBlock()` method to detect both `.json` and `.json.zst` file formats
+- ✅ **Priority Logic**: Compressed files (`.json.zst`) are checked first, with fallback to uncompressed (`.json`) files
+- ✅ **Decompression Integration**: Implemented `readBlockFile()` method for in-memory decompression of compressed files
+- ✅ **File Format Logging**: Enhanced logging to show file format (compressed vs uncompressed) and compression metrics
+- ✅ **Service-Level Support**: Updated `processAvailableFiles()` to handle both file formats when scanning for new blocks
+- ✅ **Error Handling**: Comprehensive error handling for missing files, decompression failures, and file access issues
+- ✅ **Memory Efficiency**: All decompression happens in memory without creating temporary files
+- ✅ **Backward Compatibility**: Preserves existing functionality for `.json` files while adding `.json.zst` support
+- ✅ **Performance Monitoring**: Added detailed logging with compression ratios and decompression metrics
+- ✅ **Resource Management**: Proper cleanup of zstd decoder resources with defer statements
+
+**Technical Implementation Details:**
+- **findBlockFile() Method**: Added to Indexer for smart file detection with error handling
+- **readBlockFile() Method**: Added to Indexer for conditional decompression based on file type
+- **checkBlockFileExists() Method**: Added to Service for file existence checking during batch processing
+- **Enhanced Logging**: Detailed debug logs for file detection, decompression operations, and compression statistics
+- **Compression Integration**: Direct integration with `pkg/utils/compression.go` utilities for zstd operations
+- **File Extension Detection**: Automatic detection based on `.zst` extension for compressed files
+
+**Compression Metrics Tracked:**
+- **File Format Detection**: Logs whether file is compressed_json or uncompressed_json
+- **Compression Ratios**: Shows space savings percentage for compressed files during decompression
+- **File Sizes**: Logs both compressed and decompressed file sizes for operational visibility
+- **Decompression Performance**: Tracks decompression operations with timing and memory usage context
+
+**Operational Benefits Achieved:**
+- **Mixed Directory Support**: Can process directories containing both `.json` and `.json.zst` files seamlessly
+- **Storage Efficiency**: Automatically utilizes compressed files when available, reducing I/O overhead
+- **Migration Support**: Enables gradual migration from uncompressed to compressed files without downtime
+- **Performance Optimization**: Faster file reads due to smaller compressed file sizes
+- **Space Monitoring**: Detailed visibility into compression effectiveness through logging
+
+**File Processing Priority:**
+1. **Primary Check**: Look for `{blockNumber}.json.zst` (compressed format)
+2. **Fallback Check**: Look for `{blockNumber}.json` (uncompressed format)  
+3. **Error Handling**: Clear error messages when neither format is found
+4. **Processing**: Automatic decompression for `.zst` files, direct processing for `.json` files
+
+**Indexer Workflow Enhancement:**
+- **Block Processing**: `ProcessBlock()` now handles both formats transparently
+- **File Scanning**: `processAvailableFiles()` detects both formats when looking for new blocks to process
+- **Progress Tracking**: Enhanced progress logs include file format information
+- **Error Recovery**: Robust error handling for decompression failures and corrupted files
+
+**Ready for Next Task:** Task 13 - **Configuration and Operational Enhancements**
+
+The indexer now intelligently handles both compressed and uncompressed state diff files. The next task will add comprehensive configuration options and operational tools for compression management.
 
 **Task 10 Success Criteria Reminder:**
 - Add new method `SaveCompressed(filename string, data []byte) error` to FileStore
@@ -452,7 +499,7 @@ This section outlines the step-by-step implementation plan for zstd compression.
 - [x] **Batch Compression Command for Existing Files**
 - [x] **Enhanced FileStore with Compression Support**
 - [x] **RPC Caller Integration with Compression**
-- [ ] **Dual-Format Indexer Support**
+- [x] **Dual-Format Indexer Support**
 - [ ] **Configuration and Operational Enhancements**
 
 ### Phase 4: Testing and Validation 🔄 **FOLLOW-UP PRIORITY**

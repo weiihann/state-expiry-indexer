@@ -14,6 +14,7 @@ import (
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
 	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
+	"github.com/weiihann/state-expiry-indexer/pkg/utils"
 )
 
 type Indexer struct {
@@ -61,10 +62,18 @@ func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 }
 
 func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
-	filename := fmt.Sprintf("%d.json", blockNumber)
-	filePath := filepath.Join(i.Path, filename)
+	// Smart file detection: check for .json.zst first, fallback to .json
+	filePath, isCompressed, err := i.findBlockFile(blockNumber)
+	if err != nil {
+		return fmt.Errorf("could not find state diff file for block %d: %w", blockNumber, err)
+	}
 
-	data, err := os.ReadFile(filePath)
+	i.log.Debug("Found block file",
+		"block_number", blockNumber,
+		"file_path", filePath,
+		"is_compressed", isCompressed)
+
+	data, err := i.readBlockFile(filePath, isCompressed)
 	if err != nil {
 		return fmt.Errorf("could not read state diff file for block %d: %w", blockNumber, err)
 	}
@@ -74,7 +83,10 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 		return fmt.Errorf("could not unmarshal state diff for block %d: %w", blockNumber, err)
 	}
 
-	i.log.Debug("Processing block", "block_number", blockNumber, "transaction_count", len(stateDiffs))
+	i.log.Debug("Processing block",
+		"block_number", blockNumber,
+		"transaction_count", len(stateDiffs),
+		"compressed", isCompressed)
 
 	accessedAccounts := make(map[string]bool)
 	accessedStorage := make(map[string]map[string]struct{})
@@ -126,6 +138,82 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 	i.log.Debug("Successfully updated block data", "block_number", blockNumber)
 
 	return nil
+}
+
+// checkBlockFileExists checks if a block file exists in either compressed or uncompressed format
+func (s *Service) checkBlockFileExists(blockNumber uint64) (bool, string, bool) {
+	baseFileName := fmt.Sprintf("%d.json", blockNumber)
+
+	// Check for compressed file first (.json.zst)
+	compressedPath := filepath.Join(s.indexer.Path, baseFileName+".zst")
+	if _, err := os.Stat(compressedPath); err == nil {
+		return true, compressedPath, true
+	}
+
+	// Fallback to uncompressed file (.json)
+	uncompressedPath := filepath.Join(s.indexer.Path, baseFileName)
+	if _, err := os.Stat(uncompressedPath); err == nil {
+		return true, uncompressedPath, false
+	}
+
+	return false, "", false
+}
+
+// findBlockFile finds the block file, checking for .json.zst first, then .json
+func (i *Indexer) findBlockFile(blockNumber uint64) (string, bool, error) {
+	baseFileName := fmt.Sprintf("%d.json", blockNumber)
+
+	// Check for compressed file first (.json.zst)
+	compressedPath := filepath.Join(i.Path, baseFileName+".zst")
+	if _, err := os.Stat(compressedPath); err == nil {
+		return compressedPath, true, nil
+	}
+
+	// Fallback to uncompressed file (.json)
+	uncompressedPath := filepath.Join(i.Path, baseFileName)
+	if _, err := os.Stat(uncompressedPath); err == nil {
+		return uncompressedPath, false, nil
+	}
+
+	return "", false, fmt.Errorf("no file found for block %d (checked both .json and .json.zst)", blockNumber)
+}
+
+// readBlockFile reads and optionally decompresses block file data
+func (i *Indexer) readBlockFile(filePath string, isCompressed bool) ([]byte, error) {
+	// Read file from disk
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+
+	if !isCompressed {
+		// Uncompressed JSON file - return as-is
+		return data, nil
+	}
+
+	// Compressed file - decompress in memory
+	i.log.Debug("Decompressing file",
+		"file_path", filePath,
+		"compressed_size", len(data))
+
+	decoder, err := utils.NewZstdDecoder()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zstd decoder: %w", err)
+	}
+	defer decoder.Close()
+
+	decompressed, err := decoder.Decompress(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress file %s: %w", filePath, err)
+	}
+
+	i.log.Debug("Successfully decompressed file",
+		"file_path", filePath,
+		"compressed_size", len(data),
+		"decompressed_size", len(decompressed),
+		"compression_ratio", fmt.Sprintf("%.2f%%", utils.GetCompressionRatio(len(decompressed), len(data))))
+
+	return decompressed, nil
 }
 
 // determineAccountType analyzes the account diff to determine if it's a contract
@@ -205,15 +293,11 @@ func (s *Service) processAvailableFiles(ctx context.Context) error {
 		default:
 		}
 
-		filename := fmt.Sprintf("%d.json", currentBlock)
-		filePath := filepath.Join(s.indexer.Path, filename)
-
-		// Check if file exists
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		// Check if either .json.zst or .json file exists for this block
+		hasFile, filePath, isCompressed := s.checkBlockFileExists(currentBlock)
+		if !hasFile {
 			// No more files available to process
 			break
-		} else if err != nil {
-			return fmt.Errorf("could not check file %s: %w", filename, err)
 		}
 
 		// Process the file
@@ -236,7 +320,8 @@ func (s *Service) processAvailableFiles(ctx context.Context) error {
 
 		s.log.Debug("Successfully processed block",
 			"block_number", currentBlock,
-			"filename", filename)
+			"file_path", filePath,
+			"compressed", isCompressed)
 
 		processedCount++
 		currentBlock++
