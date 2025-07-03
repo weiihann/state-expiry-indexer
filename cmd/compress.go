@@ -56,7 +56,9 @@ func compress(cmd *cobra.Command, args []string) {
 	log.Info("Starting compression process",
 		"data_dir", config.DataDir,
 		"dry_run", compressDryRun,
-		"overwrite", compressOverwrite)
+		"overwrite", compressOverwrite,
+		"delete", compressDeleteOriginal,
+	)
 
 	// Determine which files to compress
 	var filesToCompress []string
