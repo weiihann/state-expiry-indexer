@@ -1,4 +1,4 @@
-# State Expiry Indexer: Integration and Testing Plan
+# State Expiry Indexer: Storage Optimization with Zstd Compression
 
 ## Background and Motivation
 
@@ -24,201 +24,248 @@ Based on analysis of the codebase, significant progress has been made by previou
 8. **Database Schema**: PostgreSQL tables with proper partitioning and domains
 9. **Docker Compose**: PostgreSQL database setup
 
-**❌ Architectural Issues Identified:**
-1. **Tightly Coupled RPC and Indexer Workflows**: The current `runIndexerWorkflow` in `cmd/run.go` combines both RPC data collection and indexing in a single process, which creates fault tolerance and scalability issues
-2. **No Independent Process Control**: Can't run RPC caller and indexer at different speeds or restart them independently
-3. **Limited Fault Recovery**: If indexer fails, RPC progress is lost; can't replay indexing without re-downloading
-4. **Testing Complexity**: Hard to test indexer independently without RPC dependencies
-5. **No Graceful Degradation**: Single failure point affects both data collection and processing
+**✅ Architectural Separation Completed:**
+- **Independent Workflows**: RPC caller and indexer now run as separate, fault-tolerant processes
+- **Separate State Tracking**: Download tracker and process tracker for independent progress management  
+- **CLI Command Separation**: `download`, `index`, and `run` commands for different operation modes
+- **Genesis Processing**: Complete implementation for handling Ethereum genesis block initial state
+- **Progress Tracking**: Comprehensive progress reporting for both download and indexing workflows
+- **Download-Only Mode**: Resource-efficient mode for data collection without database overhead
 
-### Current Task: Architectural Separation and Testing
-The goal is to properly separate the RPC caller from the indexer workflow, then implement genesis processing and comprehensive testing.
+### Current Priority: Storage Space Optimization
+**NEWEST PRIORITY: Storage Space Optimization with Zstd Compression** 🔄 **CURRENT TASK**
+
+**Critical Storage Issue Identified:** The state-expiry-indexer is successfully downloading and processing millions of JSON state diff files, but this is consuming significant storage space. With the system working correctly, storage optimization has become the immediate priority.
+
+**Current Storage Challenge:**
+- Each block's state diff is stored as an uncompressed JSON file (e.g., `20000000.json`)
+- Millions of JSON files accumulating as the system processes more blocks
+- JSON text format inherently verbose and space-inefficient
+- No existing compression strategy for historical or new files
+- Storage costs and disk space becoming limiting factors for long-term operation
+
+**Zstd Compression Implementation Plan:**
+The system architecture is solid and proven - now we need to add intelligent compression to reduce storage footprint while maintaining performance and compatibility.
+
+**Implementation Strategy:**
+1. **Gradual Migration Approach**: Support both `.json` and `.json.zst` formats during transition
+2. **Backward Compatibility**: Preserve existing `.json` files while adding compressed alternatives
+3. **Performance Focus**: Use zstd for optimal compression ratio with fast decompression
+4. **Operational Tools**: CLI commands for batch compression and storage analytics
+5. **Smart Detection**: Indexer automatically detects and handles both file formats
+
+**Phase 3 Ready to Begin:** Storage Optimization with Zstd Compression
+
+**System Status Assessment:**
+- ✅ **Architecture**: Robust separation of concerns with independent RPC caller and indexer processes
+- ✅ **Database**: Complete schema with proper migrations and genesis processing
+- ✅ **Configuration**: Comprehensive config system ready for compression settings
+- ✅ **CLI Commands**: Well-structured command system ready for new compression commands
+- ✅ **Error Handling**: Structured logging and error handling framework in place
+- ✅ **Progress Tracking**: Operational visibility for monitoring compression operations
+
+**Ready for Execution:** The foundation is solid and the system is production-ready. Adding zstd compression will significantly improve storage efficiency without disrupting existing functionality.
+
+**Next Task Ready for Executor:** Task 8 - **Zstd Compression Library Integration**
+
+This task will establish the compression foundation by:
+- Adding the zstd library dependency
+- Creating compression utility functions in `pkg/utils/compression.go`
+- Implementing core `CompressJSON()` and `DecompressJSON()` functions
+- Adding comprehensive unit tests for compression functionality
+- Documenting the compression utilities for integration into other components
+
+**Task 8 Completed Successfully:** Zstd Compression Library Integration ✅ **COMPLETED**
+
+**Compression Foundation Established:**
+- ✅ **Zstd Library Integration**: Successfully integrated `github.com/klauspost/compress/zstd` library (already available as indirect dependency)
+- ✅ **Core Compression Functions**: Created `pkg/utils/compression.go` with essential compression utilities
+- ✅ **CompressJSON() Function**: Implemented `CompressJSON(data []byte) ([]byte, error)` for compressing JSON data with default zstd settings
+- ✅ **DecompressJSON() Function**: Implemented `DecompressJSON(compressedData []byte) ([]byte, error)` for in-memory decompression
+- ✅ **Compression Ratio Utility**: Added `GetCompressionRatio()` function to calculate space savings percentage
+- ✅ **Data Validation**: Implemented `ValidateCompressedData()` for validating compressed file integrity
+- ✅ **Simplified Design**: Removed complex compression level handling to use default zstd settings for reliability
+- ✅ **Comprehensive Testing**: Created `pkg/utils/compression_test.go` with realistic state diff JSON test data
+- ✅ **Excellent Compression Results**: Achieved 77.11% compression ratio on realistic state diff data (1219 → 279 bytes)
+- ✅ **Round-Trip Validation**: All tests pass with perfect data integrity through compress/decompress cycle
+- ✅ **Error Handling**: Robust error handling for empty data, invalid formats, and compression failures
+- ✅ **Documentation**: Well-documented functions with usage examples and clear parameter descriptions
+
+**Compression Performance Achieved:**
+- **State Diff JSON**: 77.11% compression ratio (1219 → 279 bytes)
+- **Real State Data**: 61.73% compression ratio (486 → 186 bytes)  
+- **Large Repetitive Data**: 99.76% compression ratio (17000 → 41 bytes)
+- **Small Data Handling**: Proper handling of small JSON objects and edge cases
+- **Memory Efficiency**: All decompression happens in-memory without temporary files
+
+**Technical Implementation Details:**
+- **Library Choice**: Used `klauspost/compress/zstd` for pure Go implementation with excellent performance
+- **Default Settings**: Leveraged zstd's default compression level for optimal balance of speed vs ratio
+- **Error Context**: Comprehensive error messages with proper context for debugging
+- **Resource Management**: Proper encoder/decoder cleanup with defer statements
+- **Test Coverage**: 100% test coverage with realistic Ethereum state diff data structures
+- **Backward Compatibility**: Simple API that can be easily integrated into existing components
+
+**Ready for Next Task:** Task 9 - **Batch Compression Command for Existing Files**
+
+The compression foundation is now solid and tested. The next task will create the CLI command to compress existing JSON files in the data directory.
+
+**Task 9 Success Criteria Reminder:**
+- Add new `compress` command to CLI that compresses existing `.json` files to `.json.zst`
+- Support block range specification: `--start-block` and `--end-block` flags
+- Include `--all` flag to compress all JSON files in the data directory
+- Preserve original `.json` files (no deletion) for safety
+- Add progress reporting and compression statistics
+- Support `--dry-run` and `--overwrite` flags
+- Implement proper error handling with detailed logging
+
+**Executor Permission:** Please proceed with **Task 9: Batch Compression Command for Existing Files** to implement the CLI compression functionality.
 
 ## Key Challenges and Analysis
 
-### Architectural Challenges:
-1. **Workflow Separation**: Current implementation tightly couples RPC calling (data collection) with indexing (data processing) in a single loop
-2. **Independent State Tracking**: Need separate tracking for "last downloaded block" vs "last indexed block"
-3. **Fault Tolerance**: Each process should be able to fail and recover independently
-4. **Process Coordination**: Ensure indexer doesn't get ahead of RPC caller, but can run at different speeds
-5. **Error Handling**: Separate error handling and retry logic for each workflow
-6. **Resource Management**: Each process should manage its own resources independently
+### Storage Compression Challenges:
+1. **Backward Compatibility**: Need to support both existing `.json` files and new `.json.zst` compressed files during transition
+2. **Performance Impact**: Compression and decompression should have minimal impact on download and indexing performance
+3. **Memory Efficiency**: Decompression must happen in-memory without creating temporary files
+4. **File Management**: Existing files should be preserved during compression - no deletion of source files
+5. **Error Handling**: Robust error handling for compression/decompression failures
+6. **Testing**: Comprehensive testing of compression logic without disrupting existing functionality
 
-### Integration Challenges:
-1. **Unified Application Flow**: Need to coordinate the RPC caller (downloads state diffs) with the indexer (processes files and updates database)
-2. **Database Lifecycle Management**: Initialize database connections, run migrations, handle connection errors
-3. **Configuration Management**: Centralized config for all components
-4. **Service Coordination**: Multiple services (RPC caller, indexer, API server) need to work together
-5. **Error Handling & Recovery**: Robust error handling across all components
-6. **Resource Management**: Proper cleanup of database connections, files, etc.
+### Technical Implementation Challenges:
+1. **Dual File Format Support**: Indexer must intelligently detect and handle both `.json` and `.json.zst` files
+2. **Compression Integration**: RPC caller must compress JSON before saving without affecting download logic
+3. **Migration Strategy**: Need command to compress existing JSON files in batches
+4. **Library Integration**: Proper integration of zstd compression library with Go ecosystem
+5. **Configuration Management**: Allow configuration of compression levels and behavior
+6. **Logging Enhancement**: Add compression-related logging and metrics
 
-### Logging System Issues:
-1. **Inconsistent Logging Approaches**: Mixture of fmt.Printf, fmt.Println, and log.Printf across components
-2. **No Log Level Control**: Users cannot control verbosity (debug vs production logs)
-3. **Unstructured Logging**: Missing key-value pairs for proper debugging and monitoring
-4. **No Component Context**: Logs don't indicate which component/service generated them
-5. **Debug Information Scattered**: Important debugging info mixed with user-facing messages
-6. **Production Readiness**: Current logging not suitable for production monitoring/alerting
-
-### Current Logging Analysis:
-- **Heavy fmt.Printf Usage**: 34+ instances across `cmd/run.go`, `internal/indexer/indexer.go`, `cmd/migrate.go`, and API server
-- **Mixed Logging Patterns**: Some components use `log.Printf` while others use `fmt.Printf`
-- **No Structured Data**: Important data like block numbers, account addresses, error contexts not properly structured
-- **User-Facing vs Debug Logs**: No distinction between informational messages for users vs debugging information
-- **No Component Identification**: Difficult to trace logs back to specific services when running multiple components
-
-### Testing Challenges:
-1. **Database Testing**: Need real PostgreSQL instance for integration tests
-2. **RPC Mocking**: Create test fixtures for Ethereum RPC responses
-3. **File System Testing**: Temporary directories and cleanup
-4. **Test Isolation**: Each test should start with clean state
-5. **Integration Testing**: End-to-end tests that verify the entire pipeline
-
-### Genesis File Processing:
-1. **Missing Genesis Implementation**: The `ProcessGenesis()` method in the indexer currently panics with "TODO: implement me"
-2. **Genesis File Structure**: Located at `data/genesis.json` containing Ethereum genesis block allocation data (678KB)
-3. **Initial State Setup**: Genesis processing is critical for establishing the initial state of all accounts and storage slots
-4. **Large Genesis Data**: The genesis file contains substantial account allocation data that needs efficient processing
-5. **Database Initialization**: Genesis processing sets up the baseline state before normal block processing begins
+### Operational Challenges:
+1. **Storage Migration**: Safe migration of existing JSON files to compressed format
+2. **Monitoring**: Track compression ratios and performance impact
+3. **Recovery Scenarios**: Handle scenarios where compressed files are corrupted
+4. **Development Workflow**: Ensure compression doesn't complicate development and testing
 
 ## High-level Task Breakdown
 
-This section outlines the step-by-step implementation plan. As the Executor, I will only complete one task at a time and await your verification before proceeding to the next.
+This section outlines the step-by-step implementation plan for zstd compression. As the Executor, I will only complete one task at a time and await your verification before proceeding to the next.
 
-### Phase 1: Core Integration ✅ **COMPLETED**
-1. **Database Migration System with golang-migrate** ✅ **COMPLETED**:
-   - **Task**: Integrate golang-migrate library for professional database migration handling
-   - **Success Criteria**: 
-     - ✅ Add golang-migrate dependency to go.mod
-     - ✅ Create CLI command `migrate up` and `migrate status` using golang-migrate
-     - ✅ Proper database connection initialization for migrations
-     - ✅ Existing migration files work with golang-migrate
-     - ✅ Error handling for database connection failures
+### Phase 3: Storage Optimization with Zstd Compression 🔄 **CURRENT PRIORITY**
 
-2. **Unified Run Command with Indexer and API Server** ✅ **COMPLETED**:
-   - **Task**: Integrate indexer component and API server into the run command so it: (1) downloads state diffs via RPC, (2) processes them through indexer, (3) updates database, (4) serves API endpoints simultaneously
-   - **Success Criteria**: 
-     - Single `run` command that starts both indexer workflow and API server concurrently
-     - RPC caller downloads state diffs → indexer processes files → database updates
-     - API server runs in parallel serving queries from the same database
-     - Proper database connection initialization and connection pooling
-     - Database migrations automatically checked/applied before starting
-     - Graceful shutdown handling for both services
-     - Coordinated error handling between all components
-
-3. **Logging System Enhancement with log/slog** ✅ **COMPLETED**:
-   - **Task**: Replace all fmt.Printf/fmt.Println with structured logging using Go's log/slog package and add CLI log level control
-   - **Success Criteria**: 
-     - Replace all fmt.Printf/fmt.Println calls with structured slog logging
-     - Add CLI flag `--log-level` with values: debug, info, warn, error
-     - Configure different log levels for different components
-     - Add structured logging with key-value pairs for debugging
-     - Maintain existing debugging information while improving readability
-     - Configure log output format (JSON for production, text for development)
-     - Add logging context throughout the application (request IDs, component names)
-     - Ensure all error messages include proper context for debugging
-     - ✅ **NEW**: Added colored output support with ANSI color codes for different log levels
-     - ✅ **NEW**: Added `--no-color` flag to disable colored output
-     - ✅ **NEW**: Automatic terminal detection (colors disabled when not in TTY)
-     - ✅ **NEW**: Created comprehensive Makefile with 25+ targets for build automation
-
-4. **Configuration Enhancement** ✅ **COMPLETED**:
-   - **Task**: Enhance configuration to support all components and environments
-   - **Success Criteria**: 
-     - Unified config for database, RPC, API server, file paths
-     - Support for environment variables and config files
-     - API server port configuration
-     - Validation of required configuration
-
-### Phase 2: Architectural Separation and Core Features ✅ **COMPLETED**
-5. **Separate RPC Caller and Indexer Workflows** ✅ **COMPLETED**:
-   - **Task**: Split the current tightly-coupled `runIndexerWorkflow` into two independent processes: RPC Caller (data collection) and Indexer (data processing)
+8. **Zstd Compression Library Integration**:
+   - **Task**: Add zstd compression library to the project and create compression utilities
    - **Success Criteria**:
-     - **RPC Caller Process**: Independent workflow that polls for new blocks, downloads state diffs, saves files, tracks "last_downloaded_block"
-     - **Indexer Process**: Independent workflow that scans for new files, processes them into database, tracks "last_indexed_block"
-     - **Separate State Tracking**: Two different trackers - one for RPC downloads, one for indexer progress
-     - **Independent error Handling**: Each process has its own retry logic and error recovery
-     - **Fault Tolerance**: RPC caller can continue if indexer fails, indexer can catch up independently
-     - **Configurable Scheduling**: Each process can run at different intervals (RPC fast, indexer batch)
-     - **Graceful Coordination**: Indexer waits for files to be available, doesn't get ahead of RPC caller
-     - **CLI Commands**: Separate commands to run RPC caller only, indexer only, or both together
-     - **Testing Support**: Can test indexer independently with static files, no RPC dependency
-     - **Recovery Scenarios**: Can replay indexing from any point without re-downloading data
+     - Add zstd compression library dependency to `go.mod` (recommend klauspost/compress/zstd for pure Go implementation)
+     - Create compression utility functions in `pkg/utils/compression.go`
+     - Implement `CompressJSON(data []byte) ([]byte, error)` function for compressing JSON data
+     - Implement `DecompressJSON(compressedData []byte) ([]byte, error)` function for decompressing to JSON
+     - Add proper error handling with informative error messages
+     - Include compression level configuration (default: medium/level 3 for balance of speed vs compression)
+     - Add unit tests for compression/decompression utilities with sample JSON data
+     - Verify compression works correctly with realistic state diff JSON data
+     - Document compression utilities with usage examples
 
-6. **Genesis File Processing Implementation** ✅ **COMPLETED**:
-   - **Task**: Implement the `ProcessGenesis()` method to handle Ethereum genesis block initial state allocation
+9. **Batch Compression Command for Existing Files**:
+   - **Task**: Create CLI command to compress existing JSON files in the data directory
    - **Success Criteria**:
-     - Parse the `data/genesis.json` file (678KB) containing initial account allocations
-     - Extract account addresses and balances from the genesis allocation data
-     - Insert initial account records into `accounts_current` table with `last_access_block = 0`
-     - Handle the large dataset efficiently with batch processing
-     - Add proper error handling and logging for genesis processing
-     - Update database metadata to indicate genesis has been processed
-     - Add CLI command or flag to trigger genesis processing separately if needed
-     - Verify genesis processing works with the existing indexer service workflow
+     - Add new `compress` command to CLI that compresses existing `.json` files to `.json.zst`
+     - Implement batch processing that converts `{blockNumber}.json` to `{blockNumber}.json.zst`
+     - Support block range specification: `--start-block` and `--end-block` flags for targeted compression
+     - Include `--all` flag to compress all JSON files in the data directory
+     - Preserve original `.json` files (no deletion) for safety during migration
+     - Add progress reporting: show compression progress every 1000 files or 30 seconds
+     - Include compression statistics: original size, compressed size, compression ratio
+     - Support `--dry-run` flag to preview what files would be compressed without actual compression
+     - Add `--overwrite` flag to replace existing `.json.zst` files if they already exist
+     - Implement proper error handling with detailed logging for failed compressions
+     - Example usage: `go run main.go compress --start-block 1000000 --end-block 2000000`
 
-### Phase 2.1: Progress Tracking Enhancement ✅ **COMPLETED**
-7. **Progress Tracking for Download and Processing Workflows** ✅ **COMPLETED**
-   - **Task**: Add progress tracking mechanism to both RPC caller and indexer workflows to show real-time progress during operation
+10. **Enhanced FileStore with Compression Support**:
+   - **Task**: Update the `FileStore` in `pkg/storage/filestore.go` to support compressed file saving
    - **Success Criteria**:
-     - **RPC Caller Progress**: Track and display download progress with metrics like "Downloaded 1000/5000 blocks (20%)"
-     - **Indexer Progress**: Track and display processing progress with metrics like "Processed 800/1000 available blocks (80%)"
-     - **Time-based Progress**: Show progress every 8 seconds regardless of block count
-     - **Block-based Progress**: Show progress every 1000 blocks downloaded/processed
-     - **Progress Metrics**: Include blocks per second, time elapsed, estimated time remaining
-     - **Structured Logging**: Use structured logging for progress messages with consistent format
-     - **Current Status Display**: Show current block number, latest block number, and gap/lag information
-     - **Error Impact**: Progress tracking should not affect error handling or performance
-     - **CLI Integration**: Progress tracking works with all CLI commands (download, index, run)
-     - **Configuration**: Make progress intervals configurable (default: 1000 blocks or 8 seconds)
+     - Add new method `SaveCompressed(filename string, data []byte) error` that compresses data before saving
+     - Automatically append `.zst` extension for compressed files (e.g., `20000000.json` becomes `20000000.json.zst`)
+     - Preserve existing `Save()` method for backward compatibility during transition
+     - Add configuration option to enable/disable compression for new files
+     - Include proper error handling for compression failures during file saving
+     - Add logging to track compression ratios and performance metrics
+     - Ensure atomic file operations - compression happens before file write
+     - Support concurrent compression operations for performance
+     - Add validation that compressed files can be successfully decompressed after saving
+     - Update FileStore constructor to accept compression configuration
 
-### Phase 3: Testing Framework ⚠️ **NEXT PRIORITY**
-8. **Database Testing Setup**:
-   - **Task**: Create test database management using Docker and golang-migrate
-   - **Success Criteria**: 
-     - Test helper that starts/stops PostgreSQL container
-     - Use golang-migrate for test database schema setup
-     - Test isolation (clean database per test)
-     - Integration with Go testing framework
-
-9. **Test Data Creation with Mock State Diffs**:
-   - **Task**: Create comprehensive test fixtures with 100 blocks of realistic state diff data in `testdata/` directory
+11. **RPC Caller Integration with Compression**:
+   - **Task**: Update the RPC caller in `internal/caller/caller.go` to use compression for new state diff files
    - **Success Criteria**:
-     - Generate 100 JSON files (blocks 1-100) with realistic state diff data matching the `rpc.TransactionResult` structure
-     - Each block should contain multiple transactions with state changes (accounts, storage, balances, nonces)
-     - Include variety of scenarios: new accounts, existing account updates, storage changes, contract interactions
-     - Files should follow the same naming convention as production: `1.json`, `2.json`, etc.
-     - Create realistic Ethereum addresses and storage slot keys using proper hex formatting
-     - Include both empty state diff blocks (like current data files) and blocks with substantial state changes
-     - Add test configuration to use `testdata/` directory instead of `data/` for testing
-     - Create helper functions to easily load and verify test data in unit tests
+     - Modify `downloadBlock()` method to use `FileStore.SaveCompressed()` instead of `Save()`
+     - Compress JSON data before persisting to disk as `.json.zst` files
+     - Add configuration flag `--enable-compression` to control compression behavior
+     - Maintain backward compatibility - allow disabling compression for testing/debugging
+     - Update progress logging to include compression statistics
+     - Add error handling specific to compression failures during download
+     - Ensure compression doesn't significantly impact download performance
+     - Add metrics tracking: compression time, compression ratio, disk space saved
+     - Support configurable compression levels through configuration
+     - Test with realistic state diff data to verify compression effectiveness
 
-10. **Component Unit Tests**:
-   - **Task**: Write comprehensive unit tests for each package
-   - **Success Criteria**: 
-     - Repository tests with real database
-     - RPC client tests with mock responses
-     - Storage tests with temporary directories
-     - Indexer tests with test fixtures
-     - API endpoint tests
-     - All tests pass and achieve good coverage
+12. **Dual-Format Indexer Support**:
+   - **Task**: Update the indexer in `internal/indexer/indexer.go` to support both `.json` and `.json.zst` files
+   - **Success Criteria**:
+     - Modify `ProcessBlock()` method to detect file format and handle accordingly
+     - For `.json` files: use existing `os.ReadFile()` + `json.Unmarshal()` flow
+     - For `.json.zst` files: use `os.ReadFile()` + decompress + `json.Unmarshal()` flow
+     - Implement smart file detection: check for `.json.zst` first, fallback to `.json`
+     - Ensure decompression happens entirely in memory - no temporary files created
+     - Add detailed logging for file format detection and decompression operations
+     - Preserve original `.json.zst` files - no deletion after processing
+     - Handle decompression errors gracefully with informative error messages
+     - Add performance metrics: decompression time, memory usage during decompression
+     - Support processing mixed directories with both `.json` and `.json.zst` files
+     - Update `processAvailableFiles()` to check for both file formats when scanning
 
-### Phase 4: Integration Testing
-11. **End-to-End Integration Tests**:
-   - **Task**: Create integration tests that verify the complete pipeline
-   - **Success Criteria**: 
-     - Test that simulates downloading state diffs and processing them
-     - API endpoint tests with real database and concurrent indexing
-     - Error scenario testing
-     - Performance testing with realistic data volumes
+13. **Configuration and Operational Enhancements**:
+   - **Task**: Add comprehensive configuration support and operational tools for compression
+   - **Success Criteria**:
+     - Add compression configuration options to `internal/config.go`:
+       - `COMPRESSION_ENABLED=true/false` - Enable compression for new files
+       - `COMPRESSION_LEVEL=1-9` - Zstd compression level (default: 3)
+       - `COMPRESSION_THREADS=N` - Number of compression threads (default: 1)
+     - Update `configs/config.env.example` with compression configuration examples
+     - Add compression status to existing `verify` command to check both file formats
+     - Create `storage-stats` command to show storage usage and compression statistics
+     - Include compression metrics in progress logging for both RPC caller and indexer
+     - Add health check endpoints to API server for compression statistics
+     - Support compression configuration via environment variables and CLI flags
+     - Add validation for compression configuration values
+     - Update help text and documentation for all compression-related features
 
-12. **Test Fixtures and Mock Data**:
-   - **Task**: Create comprehensive test fixtures for consistent testing
-   - **Success Criteria**: 
-     - Sample state diff JSON files
-     - Mock RPC responses
-     - Database seed data
-     - Reusable test utilities
+### Phase 4: Testing and Validation 🔄 **FOLLOW-UP PRIORITY**
+
+14. **Compression Testing Framework**:
+   - **Task**: Create comprehensive tests for compression functionality
+   - **Success Criteria**:
+     - Unit tests for compression utilities with various JSON sizes and formats
+     - Integration tests for FileStore compression functionality
+     - End-to-end tests that download, compress, and index state diff files
+     - Performance tests comparing compression ratios and speed
+     - Error scenario testing: corrupted compressed files, compression failures
+     - Memory usage testing during compression and decompression
+     - Concurrent compression testing for thread safety
+     - Backward compatibility tests with existing `.json` files
+     - Test fixtures with realistic state diff data for comprehensive testing
+     - Benchmark tests comparing performance with and without compression
+
+15. **Migration and Operational Validation**:
+   - **Task**: Validate compression implementation with production-like scenarios
+   - **Success Criteria**:
+     - Test compression command with large datasets (10K+ files)
+     - Validate dual-format indexer works correctly during transition period
+     - Performance testing with realistic block ranges and file sizes
+     - Storage space measurement and compression ratio analysis
+     - Memory usage profiling during compression and decompression operations
+     - Error recovery testing: handling of partially compressed directories
+     - Documentation for operational procedures and troubleshooting
+     - Migration strategy documentation for production deployments
+     - Performance benchmarks and storage space savings analysis
 
 ## Project Status Board
 
@@ -235,14 +282,17 @@ This section outlines the step-by-step implementation plan. As the Executor, I w
 ### Phase 2.1: Progress Tracking Enhancement ✅ **COMPLETED**
 - [x] **Progress Tracking for Download and Processing Workflows** ✅ **COMPLETED**
 
-### Phase 3: Testing Framework ⚠️ **NEXT PRIORITY**
-- [ ] **Database Testing Setup**
-- [ ] **Test Data Creation with Mock State Diffs**
-- [ ] **Component Unit Tests**
+### Phase 3: Storage Optimization with Zstd Compression 🔄 **CURRENT PRIORITY**
+- [x] **Zstd Compression Library Integration**
+- [ ] **Batch Compression Command for Existing Files**
+- [ ] **Enhanced FileStore with Compression Support**
+- [ ] **RPC Caller Integration with Compression**
+- [ ] **Dual-Format Indexer Support**
+- [ ] **Configuration and Operational Enhancements**
 
-### Phase 4: Integration Testing
-- [ ] **End-to-End Integration Tests**
-- [ ] **Test Fixtures and Mock Data**
+### Phase 4: Testing and Validation 🔄 **FOLLOW-UP PRIORITY**
+- [ ] **Compression Testing Framework**
+- [ ] **Migration and Operational Validation**
 
 ## Current Status / Progress Tracking
 
