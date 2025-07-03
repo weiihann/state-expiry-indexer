@@ -196,7 +196,7 @@ func processMergeRanges(log *slog.Logger, config internal.Config, rpcClient *rpc
 
 func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.Client, encoder *utils.ZstdEncoder, decoder *utils.ZstdDecoder, ctx context.Context, startBlock, endBlock uint64, stats *mergeStats) error {
 	var rangeDiffs []RangeDiffs
-	var filesToClean []string
+	var filesToClean []uint64
 
 	lastProgressTime := time.Now()
 	lastProgressBlock := startBlock
@@ -225,7 +225,7 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 		}
 
 		// Get block data
-		blockData, cleanupFiles, err := getBlockData(log, config, rpcClient, decoder, ctx, blockNum)
+		blockData, cleanupBlocks, err := getBlockData(log, config, rpcClient, decoder, ctx, blockNum)
 		if err != nil {
 			return fmt.Errorf("failed to get block data for block %d: %w", blockNum, err)
 		}
@@ -237,8 +237,8 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 		})
 
 		// Track files to clean up and increment download counter if no files to clean (means RPC download)
-		filesToClean = append(filesToClean, cleanupFiles...)
-		if len(cleanupFiles) == 0 {
+		filesToClean = append(filesToClean, cleanupBlocks...)
+		if len(cleanupBlocks) == 0 {
 			stats.blocksDownloaded++
 		}
 		stats.blocksProcessed++
@@ -274,12 +274,27 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 
 	// Clean up individual files if requested
 	if !mergeNoCleanup {
-		for _, file := range filesToClean {
-			if err := os.Remove(file); err != nil {
-				log.Warn("Failed to remove file", "file", file, "error", err)
-			} else {
-				log.Debug("Cleaned up file", "file", file)
-				stats.filesCleaned++
+		for _, block := range filesToClean {
+			jsonFilename := fmt.Sprintf("%d.json", block)
+			jsonFilePath := filepath.Join(config.DataDir, jsonFilename)
+			if _, err := os.Stat(jsonFilePath); err == nil {
+				if err := os.Remove(jsonFilePath); err != nil {
+					log.Warn("Failed to remove file", "file", jsonFilePath, "error", err)
+				} else {
+					log.Debug("Cleaned up file", "file", jsonFilePath)
+					stats.filesCleaned++
+				}
+			}
+
+			compressedFilename := fmt.Sprintf("%d.json.zst", block)
+			compressedFilePath := filepath.Join(config.DataDir, compressedFilename)
+			if _, err := os.Stat(compressedFilePath); err == nil {
+				if err := os.Remove(compressedFilePath); err != nil {
+					log.Warn("Failed to remove file", "file", compressedFilePath, "error", err)
+				} else {
+					log.Debug("Cleaned up file", "file", compressedFilePath)
+					stats.filesCleaned++
+				}
 			}
 		}
 	}
@@ -287,8 +302,8 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 	return nil
 }
 
-func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Client, decoder *utils.ZstdDecoder, ctx context.Context, blockNum uint64) ([]*rpc.TransactionResult, []string, error) {
-	var filesToClean []string
+func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Client, decoder *utils.ZstdDecoder, ctx context.Context, blockNum uint64) ([]*rpc.TransactionResult, []uint64, error) {
+	var filesToClean []uint64
 
 	// Check for uncompressed JSON file first
 	jsonFilename := fmt.Sprintf("%d.json", blockNum)
@@ -310,7 +325,7 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 				if err := json.Unmarshal(data, &transactionResults); err != nil {
 					log.Warn("Failed to unmarshal JSON data, treating as corrupted and proceeding to RPC", "block", blockNum, "file", jsonFilename, "error", err)
 				} else {
-					filesToClean = append(filesToClean, jsonFilePath)
+					filesToClean = append(filesToClean, blockNum)
 					log.Debug("Found valid uncompressed file", "block", blockNum, "file", jsonFilename, "transactions", len(transactionResults))
 					return transactionResults, filesToClean, nil
 				}
@@ -342,7 +357,7 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 					if err := json.Unmarshal(decompressedData, &transactionResults); err != nil {
 						log.Warn("Failed to unmarshal decompressed data, treating as corrupted and proceeding to RPC", "block", blockNum, "file", compressedFilename, "error", err)
 					} else {
-						filesToClean = append(filesToClean, compressedFilePath)
+						filesToClean = append(filesToClean, blockNum)
 						log.Debug("Found valid compressed file", "block", blockNum, "file", compressedFilename, "transactions", len(transactionResults))
 						return transactionResults, filesToClean, nil
 					}
