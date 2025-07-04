@@ -371,7 +371,7 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 		return nil, nil, fmt.Errorf("block %d not found (or corrupted) and no RPC client available for download", blockNum)
 	}
 
-	log.Info("Downloading block via RPC", "block", blockNum, "reason", "missing_or_corrupted_files")
+	log.Debug("Downloading block via RPC", "block", blockNum, "reason", "missing_or_corrupted_files")
 
 	blockBigInt := big.NewInt(int64(blockNum))
 	stateDiff, err := rpcClient.GetStateDiff(ctx, blockBigInt)
