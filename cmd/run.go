@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/api"
-	"github.com/weiihann/state-expiry-indexer/internal/caller"
 	"github.com/weiihann/state-expiry-indexer/internal/database"
 	"github.com/weiihann/state-expiry-indexer/internal/indexer"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
@@ -20,8 +19,6 @@ import (
 	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
 	"github.com/weiihann/state-expiry-indexer/pkg/storage"
 )
-
-var downloadOnly bool
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -31,7 +28,6 @@ var runCmd = &cobra.Command{
 }
 
 func init() {
-	runCmd.Flags().BoolVar(&downloadOnly, "download-only", false, "Run only the RPC caller (downloader) component, disabling both indexer and API server")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -54,18 +50,13 @@ func run(cmd *cobra.Command, args []string) {
 		"poll_interval", config.PollInterval,
 		"db_max_conns", config.DBMaxConns,
 		"db_min_conns", config.DBMinConns,
-		"download_only", downloadOnly)
+	)
 
-	// Skip database operations in download-only mode
-	if !downloadOnly {
-		// Run database migrations
-		log.Info("Checking database migrations...")
-		if err := RunMigrationsUp(config); err != nil {
-			log.Error("Failed to run database migrations", "error", err)
-			os.Exit(1)
-		}
-	} else {
-		log.Info("Download-only mode: skipping database operations")
+	// Run database migrations
+	log.Info("Checking database migrations...")
+	if err := RunMigrationsUp(config); err != nil {
+		log.Error("Failed to run database migrations", "error", err)
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
@@ -73,20 +64,17 @@ func run(cmd *cobra.Command, args []string) {
 	var db *pgxpool.Pool
 	var repo *repository.StateRepository
 
-	// Initialize database connection and repository only if not in download-only mode
-	if !downloadOnly {
-		// Initialize database connection pool
-		log.Info("Initializing database connection...")
-		db, err = database.Connect(ctx, config)
-		if err != nil {
-			log.Error("Failed to connect to database", "error", err)
-			os.Exit(1)
-		}
-		defer db.Close()
-
-		// Initialize repository
-		repo = repository.NewStateRepository(db)
+	// Initialize database connection pool
+	log.Info("Initializing database connection...")
+	db, err = database.Connect(ctx, config)
+	if err != nil {
+		log.Error("Failed to connect to database", "error", err)
+		os.Exit(1)
 	}
+	defer db.Close()
+
+	// Initialize repository
+	repo = repository.NewStateRepository(db)
 
 	// Initialize RPC clients
 	var clients []*rpc.Client
@@ -109,20 +97,26 @@ func run(cmd *cobra.Command, args []string) {
 	}
 	defer fileStore.Close()
 
-	// Initialize RPC caller service (always needed)
-	rpcCallerSvc := caller.NewService(clients, fileStore, config)
-
 	// Initialize services only if not in download-only mode
 	var indexerSvc *indexer.Service
 	var apiServer *api.Server
 
-	if !downloadOnly {
-		indexerSvc = indexer.NewService(config.DataDir, repo, config)
-
-		// Initialize API server
-		log.Info("Initializing API server...", "host", config.APIHost, "port", config.APIPort)
-		apiServer = api.NewServer(repo)
+	// Use the first RPC client for the indexer (could be enhanced to use multiple clients)
+	var rpcClient *rpc.Client
+	if len(clients) > 0 {
+		rpcClient = clients[0]
 	}
+
+	indexerSvc = indexer.NewService(repo, rpcClient, config)
+	if indexerSvc == nil {
+		log.Error("Failed to create indexer service")
+		os.Exit(1)
+	}
+	defer indexerSvc.Close()
+
+	// Initialize API server
+	log.Info("Initializing API server...", "host", config.APIHost, "port", config.APIPort)
+	apiServer = api.NewServer(repo)
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(ctx)
@@ -134,65 +128,38 @@ func run(cmd *cobra.Command, args []string) {
 	var wg sync.WaitGroup
 
 	// Start API server in goroutine (only if not in download-only mode)
-	if !downloadOnly {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			if err := apiServer.Run(ctx, config.APIHost, config.APIPort); err != nil {
-				log.Error("API server error", "error", err, "host", config.APIHost, "port", config.APIPort)
-			}
-		}()
-	}
-
-	// Start RPC caller workflow in goroutine (always)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Info("Starting RPC caller workflow...",
-			"poll_interval", config.PollInterval)
 
-		if err := rpcCallerSvc.Run(ctx); err != nil {
-			log.Error("RPC caller workflow error", "error", err)
+		if err := apiServer.Run(ctx, config.APIHost, config.APIPort); err != nil {
+			log.Error("API server error", "error", err, "host", config.APIHost, "port", config.APIPort)
 		}
-		log.Info("RPC caller workflow stopped")
 	}()
 
-	// Start indexer processor workflow in goroutine (only if not in download-only mode)
-	if !downloadOnly {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			log.Info("Starting indexer processor workflow...",
-				"poll_interval", config.PollInterval,
-				"block_batch_size", config.BlockBatchSize)
+	// Start indexer processor workflow in goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Info("Starting range-based indexer processor workflow...",
+			"poll_interval", config.PollInterval,
+			"range_size", config.RangeSize)
 
-			if err := indexerSvc.RunProcessor(ctx); err != nil {
-				log.Error("Indexer processor workflow error", "error", err)
-			}
-			log.Info("Indexer processor workflow stopped")
-		}()
-	}
+		if err := indexerSvc.RunProcessor(ctx); err != nil {
+			log.Error("Range-based indexer processor workflow error", "error", err)
+		}
+		log.Info("Range-based indexer processor workflow stopped")
+	}()
 
-	if downloadOnly {
-		log.Info("Service started in download-only mode",
-			"data_dir", config.DataDir,
-			"environment", config.Environment)
-		log.Info("Services running",
-			"rpc_caller_running", true,
-			"indexer_processor_running", false,
-			"api_available", false)
-	} else {
-		log.Info("All services started successfully",
-			"api_port", config.APIPort,
-			"api_url", fmt.Sprintf("http://%s:%d", config.APIHost, config.APIPort),
-			"environment", config.Environment,
-			"data_dir", config.DataDir)
-		log.Info("Services running",
-			"api_available", true,
-			"rpc_caller_running", true,
-			"indexer_processor_running", true)
-	}
+	log.Info("All services started successfully",
+		"api_port", config.APIPort,
+		"api_url", fmt.Sprintf("http://%s:%d", config.APIHost, config.APIPort),
+		"environment", config.Environment,
+		"data_dir", config.DataDir)
+	log.Info("Services running",
+		"api_available", true,
+		"rpc_caller_running", true,
+		"indexer_processor_running", true)
 	log.Info("Press Ctrl+C to stop all services")
 
 	// Wait for shutdown signal

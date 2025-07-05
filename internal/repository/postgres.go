@@ -29,56 +29,69 @@ func NewStateRepository(db *pgxpool.Pool) *StateRepository {
 	return &StateRepository{db: db}
 }
 
-func (r *StateRepository) GetLastIndexedBlock(ctx context.Context) (uint64, error) {
+func (r *StateRepository) GetLastIndexedRange(ctx context.Context) (uint64, error) {
 	var value string
-	err := r.db.QueryRow(ctx, "SELECT value FROM metadata WHERE key = 'last_indexed_block'").Scan(&value)
+	err := r.db.QueryRow(ctx, "SELECT value FROM metadata WHERE key = 'last_indexed_range'").Scan(&value)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			// This can happen if the metadata table is empty. Assume we start from 0.
 			return 0, nil
 		}
-		return 0, fmt.Errorf("could not get last indexed block: %w", err)
+		return 0, fmt.Errorf("could not get last indexed range: %w", err)
 	}
 
-	var blockNumber uint64
-	if _, err := fmt.Sscanf(value, "%d", &blockNumber); err != nil {
-		return 0, fmt.Errorf("could not parse last indexed block value '%s': %w", value, err)
+	var rangeNumber uint64
+	if _, err := fmt.Sscanf(value, "%d", &rangeNumber); err != nil {
+		return 0, fmt.Errorf("could not parse last indexed range value '%s': %w", value, err)
 	}
 
-	return blockNumber, nil
+	return rangeNumber, nil
 }
 
-func (r *StateRepository) updateLastIndexedBlockInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64) error {
-	sql := `UPDATE metadata SET value = $1 WHERE key = 'last_indexed_block'`
-	if _, err := tx.Exec(ctx, sql, fmt.Sprintf("%d", blockNumber)); err != nil {
-		return fmt.Errorf("could not update last indexed block: %w", err)
+func (r *StateRepository) updateLastIndexedRangeInTx(ctx context.Context, tx pgx.Tx, rangeNumber uint64) error {
+	sql := `INSERT INTO metadata (key, value) VALUES ('last_indexed_range', $1) 
+		ON CONFLICT (key) DO UPDATE SET value = $1`
+	if _, err := tx.Exec(ctx, sql, fmt.Sprintf("%d", rangeNumber)); err != nil {
+		return fmt.Errorf("could not update last indexed range: %w", err)
 	}
 	return nil
 }
 
-func (r *StateRepository) UpdateBlockDataInTx(ctx context.Context, blockNumber uint64, accounts map[string]bool, storage map[string]map[string]struct{}) error {
+// UpdateRangeDataInTx processes all blocks in a range and updates the last indexed range
+func (r *StateRepository) UpdateRangeDataInTx(ctx context.Context,
+	accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64,
+	rangeNumber uint64,
+) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("could not begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	if err := r.upsertAccessedAccountsInTx(ctx, tx, blockNumber, accounts); err != nil {
-		return err
+	if err := r.upsertAccessedAccountsInTx(ctx, tx, accounts, accountType); err != nil {
+		return fmt.Errorf("could not upsert accounts: %w", err)
 	}
 
-	if err := r.upsertAccessedStorageInTx(ctx, tx, blockNumber, storage); err != nil {
-		return err
+	if err := r.upsertAccessedStorageInTx(ctx, tx, storage); err != nil {
+		return fmt.Errorf("could not upsert storage: %w", err)
 	}
 
-	if err := r.updateLastIndexedBlockInTx(ctx, tx, blockNumber); err != nil {
-		return err
+	// Update the last indexed range only after all blocks are processed successfully
+	if err := r.updateLastIndexedRangeInTx(ctx, tx, rangeNumber); err != nil {
+		return fmt.Errorf("could not update last indexed range: %w", err)
 	}
 
 	return tx.Commit(ctx)
 }
 
-func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, accounts map[string]bool) error {
+// BlockData represents the processed data for a single block
+type BlockData struct {
+	BlockNumber uint64
+	Accounts    map[string]bool
+	Storage     map[string]map[string]struct{}
+}
+
+func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, accounts map[string]uint64, accountType map[string]bool) error {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -86,13 +99,13 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	var values []any
 	var placeholders []string
 	i := 1
-	for acc, isContract := range accounts {
+	for acc, blockNumber := range accounts {
 		addr, err := utils.HexToBytes(acc)
 		if err != nil {
 			continue
 		}
 		placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", i, i+1, i+2))
-		values = append(values, addr, blockNumber, isContract)
+		values = append(values, addr, blockNumber, accountType[acc])
 		i += 3
 	}
 
@@ -118,7 +131,7 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	return nil
 }
 
-func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, blockNumber uint64, storage map[string]map[string]struct{}) error {
+func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, storage map[string]map[string]uint64) error {
 	if len(storage) == 0 {
 		return nil
 	}
@@ -127,7 +140,7 @@ func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.
 	var placeholders []string
 	i := 1
 	for addr, slots := range storage {
-		for slot := range slots {
+		for slot, blockNumber := range slots {
 			addressBytes, err := utils.HexToBytes(addr)
 			if err != nil {
 				continue

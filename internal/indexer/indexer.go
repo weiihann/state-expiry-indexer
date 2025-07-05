@@ -2,11 +2,8 @@ package indexer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	core "github.com/ethereum/go-ethereum/core"
@@ -14,96 +11,165 @@ import (
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
 	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
-	"github.com/weiihann/state-expiry-indexer/pkg/utils"
+	"github.com/weiihann/state-expiry-indexer/pkg/storage"
 )
 
 type Indexer struct {
-	Path string
-	repo *repository.StateRepository
-	log  *slog.Logger
+	repo           *repository.StateRepository
+	rangeProcessor *storage.RangeProcessor
+	config         internal.Config
+	log            *slog.Logger
 }
 
 type Service struct {
-	indexer *Indexer
-	repo    *repository.StateRepository
-	config  internal.Config
-	log     *slog.Logger
+	indexer   *Indexer
+	repo      *repository.StateRepository
+	rpcClient *rpc.Client
+	config    internal.Config
+	log       *slog.Logger
 }
 
-func NewIndexer(path string, repo *repository.StateRepository) *Indexer {
+func NewIndexer(repo *repository.StateRepository, rangeProcessor *storage.RangeProcessor, config internal.Config) *Indexer {
 	return &Indexer{
-		Path: path,
-		repo: repo,
-		log:  logger.GetLogger("indexer"),
+		repo:           repo,
+		rangeProcessor: rangeProcessor,
+		config:         config,
+		log:            logger.GetLogger("indexer"),
 	}
 }
 
-func NewService(path string, repo *repository.StateRepository, config internal.Config) *Service {
+func NewService(repo *repository.StateRepository, rpcClient *rpc.Client, config internal.Config) *Service {
 	log := logger.GetLogger("indexer-service")
+
+	// Initialize range processor
+	rangeProcessor, err := storage.NewRangeProcessor(config.DataDir, rpcClient, config.RangeSize)
+	if err != nil {
+		log.Error("Failed to create range processor", "error", err)
+		return nil
+	}
+
 	return &Service{
-		indexer: NewIndexer(path, repo),
-		repo:    repo,
-		config:  config,
-		log:     log,
+		indexer:   NewIndexer(repo, rangeProcessor, config),
+		rpcClient: rpcClient,
+		repo:      repo,
+		config:    config,
+		log:       log,
+	}
+}
+
+// Close properly closes the service and its resources
+func (s *Service) Close() {
+	if s.indexer != nil && s.indexer.rangeProcessor != nil {
+		s.indexer.rangeProcessor.Close()
 	}
 }
 
 func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 	genesis := core.DefaultGenesisBlock()
 
-	accessedAccounts := make(map[string]bool, len(genesis.Alloc))
+	accessedAccounts := make(map[string]uint64, len(genesis.Alloc))
+	accessedAccountsType := make(map[string]bool, len(genesis.Alloc))
 	for acc, alloc := range genesis.Alloc {
 		// Check if this genesis account has code (is a contract)
 		isContract := len(alloc.Code) > 0
-		accessedAccounts[acc.String()] = isContract
+		accessedAccounts[acc.String()] = 0
+		accessedAccountsType[acc.String()] = isContract
 	}
 
-	return i.repo.UpdateBlockDataInTx(ctx, 0, accessedAccounts, nil)
+	return i.repo.UpdateRangeDataInTx(ctx, accessedAccounts, accessedAccountsType, nil, 0)
 }
 
-func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
-	// Smart file detection: check for .json.zst first, fallback to .json
-	filePath, isCompressed, err := i.findBlockFile(blockNumber)
+// ProcessRange processes an entire range of blocks
+func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64) error {
+	if rangeNumber == 0 {
+		// Genesis is handled separately
+		return i.ProcessGenesis(ctx)
+	}
+
+	start, end := i.rangeProcessor.GetRangeBlockNumbers(rangeNumber)
+
+	i.log.Info("Processing range",
+		"range_number", rangeNumber,
+		"range_start", start,
+		"range_end", end,
+		"range_size", end-start+1)
+
+	// Ensure the range file exists (download if necessary)
+	if err := i.rangeProcessor.EnsureRangeExists(ctx, rangeNumber); err != nil {
+		return fmt.Errorf("could not ensure range %d exists: %w", rangeNumber, err)
+	}
+
+	// Read the range file
+	rangeDiffs, err := i.rangeProcessor.ReadRange(rangeNumber)
 	if err != nil {
-		return fmt.Errorf("could not find state diff file for block %d: %w", blockNumber, err)
+		return fmt.Errorf("could not read range %d: %w", rangeNumber, err)
 	}
 
-	i.log.Debug("Found block file",
+	i.log.Debug("Read range file",
+		"range_number", rangeNumber,
+		"blocks_in_range", len(rangeDiffs))
+
+	// Process all blocks in the range and prepare batch data
+	accounts := make(map[string]uint64)
+	accountType := make(map[string]bool)
+	storage := make(map[string]map[string]uint64)
+	for _, rangeDiff := range rangeDiffs {
+		err := i.processBlockDiff(ctx, rangeDiff, accounts, accountType, storage)
+		if err != nil {
+			return fmt.Errorf("could not process block %d in range %d: %w", rangeDiff.BlockNum, rangeNumber, err)
+		}
+	}
+
+	// Update database with all blocks in the range in a single transaction
+	if err := i.repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, rangeNumber); err != nil {
+		return fmt.Errorf("could not update range data for range %d: %w", rangeNumber, err)
+	}
+
+	i.log.Info("Successfully processed range",
+		"range_number", rangeNumber,
+		"blocks_processed", len(rangeDiffs),
+		"range_start", start,
+		"range_end", end)
+
+	return nil
+}
+
+// processBlockDiff processes a single block's state diff data and returns the processed data
+func (i *Indexer) processBlockDiff(ctx context.Context,
+	rangeDiff storage.RangeDiffs,
+	accounts map[string]uint64,
+	accountType map[string]bool,
+	storage map[string]map[string]uint64,
+) error {
+	blockNumber := rangeDiff.BlockNum
+	stateDiffs := rangeDiff.Diffs
+
+	i.log.Debug("Processing block from range",
 		"block_number", blockNumber,
-		"file_path", filePath,
-		"is_compressed", isCompressed)
-
-	data, err := i.readBlockFile(filePath, isCompressed)
-	if err != nil {
-		return fmt.Errorf("could not read state diff file for block %d: %w", blockNumber, err)
-	}
-
-	var stateDiffs []rpc.TransactionResult
-	if err := json.Unmarshal(data, &stateDiffs); err != nil {
-		return fmt.Errorf("could not unmarshal state diff for block %d: %w", blockNumber, err)
-	}
-
-	i.log.Debug("Processing block",
-		"block_number", blockNumber,
-		"transaction_count", len(stateDiffs),
-		"compressed", isCompressed)
-
-	accessedAccounts := make(map[string]bool)
-	accessedStorage := make(map[string]map[string]struct{})
+		"transaction_count", len(stateDiffs))
 
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
+			accounts[addr] = blockNumber
+
 			// Determine if this account is a contract based on state diff
-			accessedAccounts[addr] = i.determineAccountType(diff)
+			isContract := i.determineAccountType(diff)
+			if old, ok := accountType[addr]; !ok { // new account
+				accountType[addr] = isContract
+			} else if !old {
+				accountType[addr] = isContract
+			} else {
+				accountType[addr] = isContract
+			}
 
 			if diff.Storage != nil {
-				if _, ok := accessedStorage[addr]; !ok {
-					accessedStorage[addr] = make(map[string]struct{})
+				if _, ok := storage[addr]; !ok {
+					storage[addr] = make(map[string]uint64)
 				}
 				storageMap, ok := diff.Storage.(map[string]any)
 				if ok {
 					for slot := range storageMap {
-						accessedStorage[addr][slot] = struct{}{}
+						storage[addr][slot] = blockNumber
 					}
 				}
 			}
@@ -112,108 +178,10 @@ func (i *Indexer) ProcessBlock(ctx context.Context, blockNumber uint64) error {
 
 	i.log.Debug("Processed state access patterns",
 		"block_number", blockNumber,
-		"accessed_accounts_count", len(accessedAccounts),
-		"accessed_storage_accounts", len(accessedStorage))
-
-	// Log detailed access patterns at debug level
-	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		for addr := range accessedAccounts {
-			i.log.Debug("Accessed account", "block_number", blockNumber, "account", addr)
-		}
-
-		for addr, slots := range accessedStorage {
-			for slot := range slots {
-				i.log.Debug("Accessed storage",
-					"block_number", blockNumber,
-					"account", addr,
-					"slot", slot)
-			}
-		}
-	}
-
-	if err := i.repo.UpdateBlockDataInTx(ctx, blockNumber, accessedAccounts, accessedStorage); err != nil {
-		return fmt.Errorf("could not update block data for block %d: %w", blockNumber, err)
-	}
-
-	i.log.Debug("Successfully updated block data", "block_number", blockNumber)
+		"accessed_accounts_count", len(accounts),
+		"accessed_storage_accounts", len(storage))
 
 	return nil
-}
-
-// checkBlockFileExists checks if a block file exists in either compressed or uncompressed format
-func (s *Service) checkBlockFileExists(blockNumber uint64) (bool, string, bool) {
-	baseFileName := fmt.Sprintf("%d.json", blockNumber)
-
-	// Check for compressed file first (.json.zst)
-	compressedPath := filepath.Join(s.indexer.Path, baseFileName+".zst")
-	if _, err := os.Stat(compressedPath); err == nil {
-		return true, compressedPath, true
-	}
-
-	// Fallback to uncompressed file (.json)
-	uncompressedPath := filepath.Join(s.indexer.Path, baseFileName)
-	if _, err := os.Stat(uncompressedPath); err == nil {
-		return true, uncompressedPath, false
-	}
-
-	return false, "", false
-}
-
-// findBlockFile finds the block file, checking for .json.zst first, then .json
-func (i *Indexer) findBlockFile(blockNumber uint64) (string, bool, error) {
-	baseFileName := fmt.Sprintf("%d.json", blockNumber)
-
-	// Check for compressed file first (.json.zst)
-	compressedPath := filepath.Join(i.Path, baseFileName+".zst")
-	if _, err := os.Stat(compressedPath); err == nil {
-		return compressedPath, true, nil
-	}
-
-	// Fallback to uncompressed file (.json)
-	uncompressedPath := filepath.Join(i.Path, baseFileName)
-	if _, err := os.Stat(uncompressedPath); err == nil {
-		return uncompressedPath, false, nil
-	}
-
-	return "", false, fmt.Errorf("no file found for block %d (checked both .json and .json.zst)", blockNumber)
-}
-
-// readBlockFile reads and optionally decompresses block file data
-func (i *Indexer) readBlockFile(filePath string, isCompressed bool) ([]byte, error) {
-	// Read file from disk
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
-
-	if !isCompressed {
-		// Uncompressed JSON file - return as-is
-		return data, nil
-	}
-
-	// Compressed file - decompress in memory
-	i.log.Debug("Decompressing file",
-		"file_path", filePath,
-		"compressed_size", len(data))
-
-	decoder, err := utils.NewZstdDecoder()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create zstd decoder: %w", err)
-	}
-	defer decoder.Close()
-
-	decompressed, err := decoder.Decompress(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decompress file %s: %w", filePath, err)
-	}
-
-	i.log.Debug("Successfully decompressed file",
-		"file_path", filePath,
-		"compressed_size", len(data),
-		"decompressed_size", len(decompressed),
-		"compression_ratio", fmt.Sprintf("%.2f%%", utils.GetCompressionRatio(len(decompressed), len(data))))
-
-	return decompressed, nil
 }
 
 // determineAccountType analyzes the account diff to determine if it's a contract
@@ -228,16 +196,12 @@ func (i *Indexer) determineAccountType(diff rpc.AccountDiff) bool {
 	return false
 }
 
-// ProcessBlock processes a single block through the indexer
-func (s *Service) ProcessBlock(ctx context.Context, blockNumber uint64) error {
-	return s.indexer.ProcessBlock(ctx, blockNumber)
-}
-
-// RunProcessor starts the indexer processor workflow that processes available files
+// RunProcessor starts the indexer processor workflow that processes available ranges
 func (s *Service) RunProcessor(ctx context.Context) error {
-	s.log.Info("Starting indexer processor workflow",
+	s.log.Info("Starting range-based indexer processor workflow",
 		"poll_interval", s.config.PollInterval,
-		"data_path", s.indexer.Path)
+		"data_path", s.config.DataDir,
+		"range_size", s.config.RangeSize)
 
 	pollInterval := time.Duration(s.config.PollInterval) * time.Second
 
@@ -250,7 +214,7 @@ func (s *Service) RunProcessor(ctx context.Context) error {
 			// Continue with processing logic
 		}
 
-		if err := s.processAvailableFiles(ctx); err != nil {
+		if err := s.processAvailableRanges(ctx); err != nil {
 			s.log.Warn("Processing cycle failed, retrying...",
 				"error", err,
 				"retry_interval", pollInterval)
@@ -263,77 +227,97 @@ func (s *Service) RunProcessor(ctx context.Context) error {
 	}
 }
 
-// processAvailableFiles processes all available files that haven't been indexed yet
-func (s *Service) processAvailableFiles(ctx context.Context) error {
-	lastIndexedBlock, err := s.repo.GetLastIndexedBlock(ctx)
+// processAvailableRanges processes all available ranges that haven't been indexed yet
+func (s *Service) processAvailableRanges(ctx context.Context) error {
+	lastIndexedRange, err := s.repo.GetLastIndexedRange(ctx)
 	if err != nil {
-		return fmt.Errorf("could not get last processed block: %w", err)
+		return fmt.Errorf("could not get last processed range: %w", err)
 	}
 
-	s.log.Debug("Checking for files to process", "last_indexed_block", lastIndexedBlock)
+	s.log.Debug("Checking for ranges to process", "last_indexed_range", lastIndexedRange)
 
-	// Special case: process genesis if starting from block 0
-	if lastIndexedBlock == 0 {
-		if err := s.indexer.ProcessGenesis(ctx); err != nil {
-			return fmt.Errorf("could not process genesis: %w", err)
+	// Special case: process genesis if starting from range 0
+	if lastIndexedRange == 0 {
+		if err := s.indexer.ProcessRange(ctx, 0); err != nil {
+			return fmt.Errorf("could not process genesis range: %w", err)
 		}
 		s.log.Info("Successfully processed genesis")
+		lastIndexedRange = 0
 	}
 
 	processedCount := 0
-	currentBlock := lastIndexedBlock + 1
+	currentRange := lastIndexedRange + 1
 	lastProgressTime := time.Now()
-	lastProgressBlock := lastIndexedBlock
+	lastProgressRange := lastIndexedRange
 
-	// Process files sequentially from the next unprocessed block
-	for {
+	// Get latest block to determine how many ranges we can process
+	latestBlock, err := s.rpcClient.GetLatestBlockNumber(ctx)
+	if err != nil {
+		return fmt.Errorf("could not get latest available block: %w", err)
+	}
+
+	latestRange := s.indexer.rangeProcessor.GetRangeNumber(latestBlock.Uint64())
+
+	s.log.Debug("Range processing scope",
+		"latest_block", latestBlock,
+		"latest_range", latestRange,
+		"current_range", currentRange)
+
+	// Process ranges sequentially
+	for currentRange <= latestRange {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
 
-		// Check if either .json.zst or .json file exists for this block
-		hasFile, filePath, isCompressed := s.checkBlockFileExists(currentBlock)
-		if !hasFile {
-			// No more files available to process
-			break
+		// Process the range
+		if err := s.indexer.ProcessRange(ctx, currentRange); err != nil {
+			return fmt.Errorf("could not process range %d: %w", currentRange, err)
 		}
 
-		// Process the file
-		if err := s.indexer.ProcessBlock(ctx, currentBlock); err != nil {
-			return fmt.Errorf("could not process block %d: %w", currentBlock, err)
-		}
-
-		// Show simple progress every 1000 blocks or 8 seconds
+		// Show progress every few ranges or 30 seconds
 		now := time.Now()
-		blocksSinceProgress := currentBlock - lastProgressBlock
+		rangesSinceProgress := currentRange - lastProgressRange
 		timeSinceProgress := now.Sub(lastProgressTime).Seconds()
 
-		if blocksSinceProgress >= 1000 || timeSinceProgress >= 8 {
-			s.log.Info("Processing progress",
-				"current_block", currentBlock,
+		if rangesSinceProgress >= 5 || timeSinceProgress >= 30 {
+			start, end := s.indexer.rangeProcessor.GetRangeBlockNumbers(currentRange)
+			s.log.Info("Range processing progress",
+				"current_range", currentRange,
+				"current_range_blocks", fmt.Sprintf("%d-%d", start, end),
+				"latest_range", latestRange,
+				"remaining_ranges", latestRange-currentRange,
 				"processed_this_cycle", processedCount+1)
 			lastProgressTime = now
-			lastProgressBlock = currentBlock
+			lastProgressRange = currentRange
 		}
 
-		s.log.Debug("Successfully processed block",
-			"block_number", currentBlock,
-			"file_path", filePath,
-			"compressed", isCompressed)
+		s.log.Debug("Successfully processed range",
+			"range_number", currentRange,
+			"blocks_in_range", s.config.RangeSize)
 
 		processedCount++
-		currentBlock++
+		currentRange++
 	}
 
+	// TODO: When caught up to the latest range, switch to block-by-block processing.
+	// The current implementation waits for a full new range to become available, which
+	// can lead to delays in indexing the most recent blocks. The new logic should:
+	// 1. Check if we are at the chain head (e.g., lastIndexedRange == latestRange).
+	// 2. If so, switch to polling for new blocks individually.
+	// 3. Process new blocks one by one until a new full range is available behind us.
+	// 4. Once a full range is available, we can potentially switch back to range processing.
+	// This will require careful state management and new logic to fetch and process
+	// single blocks.
+
 	if processedCount > 0 {
-		s.log.Info("Completed processing cycle",
-			"processed_blocks", processedCount,
-			"last_indexed_block", currentBlock-1)
+		s.log.Info("Completed range processing cycle",
+			"processed_ranges", processedCount,
+			"last_indexed_range", currentRange-1)
 	} else {
-		s.log.Debug("No new files available for processing",
-			"last_indexed_block", lastIndexedBlock)
+		s.log.Debug("No new ranges available for processing",
+			"last_indexed_range", lastIndexedRange)
 	}
 
 	return nil
