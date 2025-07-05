@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// TODO:
 type Config struct {
 	// Database configuration
 	DBHost     string `mapstructure:"DB_HOST"`
@@ -34,6 +35,7 @@ type Config struct {
 	// Indexer configuration
 	BlockBatchSize int `mapstructure:"BLOCK_BATCH_SIZE"`
 	PollInterval   int `mapstructure:"POLL_INTERVAL_SECONDS"`
+	RangeSize      int `mapstructure:"RANGE_SIZE"`
 
 	// Logging configuration
 	LogLevel  string `mapstructure:"LOG_LEVEL"`
@@ -133,6 +135,7 @@ func setDefaults() {
 	// Indexer defaults
 	viper.SetDefault("BLOCK_BATCH_SIZE", 100)
 	viper.SetDefault("POLL_INTERVAL_SECONDS", 10)
+	viper.SetDefault("RANGE_SIZE", 1000)
 
 	// Logging defaults
 	viper.SetDefault("LOG_LEVEL", "info")
@@ -241,6 +244,14 @@ func validateConfig(config Config) error {
 		errors = append(errors, ValidationError{
 			Field:   "POLL_INTERVAL_SECONDS",
 			Message: "poll interval must be greater than 0 seconds",
+		})
+	}
+
+	// Range size validation
+	if config.RangeSize <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "RANGE_SIZE",
+			Message: "range size must be greater than 0",
 		})
 	}
 
