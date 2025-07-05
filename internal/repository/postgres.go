@@ -10,6 +10,15 @@ import (
 	"github.com/weiihann/state-expiry-indexer/pkg/utils"
 )
 
+const (
+	// pgMaxParams is the maximum number of parameters a postgres query can have.
+	pgMaxParams = 65535
+	// paramsPerUpsert is the number of parameters for each item in the upsert queries (both accounts and storage).
+	paramsPerUpsert = 3
+	// batchSize is the number of items to upsert in a single batch.
+	batchSize = pgMaxParams / paramsPerUpsert
+)
+
 type Contract struct {
 	Address   string `json:"address"`
 	SlotCount int    `json:"slot_count"`
@@ -96,21 +105,14 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 		return nil
 	}
 
-	var values []any
-	var placeholders []string
-	i := 1
-	for acc, blockNumber := range accounts {
-		addr, err := utils.HexToBytes(acc)
-		if err != nil {
-			continue
-		}
-		placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", i, i+1, i+2))
-		values = append(values, addr, blockNumber, accountType[acc])
-		i += 3
+	type accountToUpsert struct {
+		address     string
+		blockNumber uint64
 	}
 
-	if len(placeholders) == 0 {
-		return nil
+	accountsToUpdate := make([]accountToUpsert, 0, len(accounts))
+	for acc, blockNumber := range accounts {
+		accountsToUpdate = append(accountsToUpdate, accountToUpsert{address: acc, blockNumber: blockNumber})
 	}
 
 	sql := `
@@ -121,11 +123,37 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 		    is_contract = COALESCE(accounts_current.is_contract, EXCLUDED.is_contract)
 		WHERE accounts_current.last_access_block < EXCLUDED.last_access_block;
 	`
-	query := fmt.Sprintf(sql, strings.Join(placeholders, ","))
 
-	_, err := tx.Exec(ctx, query, values...)
-	if err != nil {
-		return fmt.Errorf("could not upsert accessed accounts in tx: %w", err)
+	for i := 0; i < len(accountsToUpdate); i += batchSize {
+		end := i + batchSize
+		if end > len(accountsToUpdate) {
+			end = len(accountsToUpdate)
+		}
+		batch := accountsToUpdate[i:end]
+
+		var values []any
+		var placeholders []string
+		paramIdx := 1
+		for _, account := range batch {
+			addr, err := utils.HexToBytes(account.address)
+			if err != nil {
+				continue
+			}
+			placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", paramIdx, paramIdx+1, paramIdx+2))
+			values = append(values, addr, account.blockNumber, accountType[account.address])
+			paramIdx += 3
+		}
+
+		if len(placeholders) == 0 {
+			continue // Nothing to insert in this batch
+		}
+
+		query := fmt.Sprintf(sql, strings.Join(placeholders, ","))
+
+		_, err := tx.Exec(ctx, query, values...)
+		if err != nil {
+			return fmt.Errorf("could not upsert accessed accounts in tx: %w", err)
+		}
 	}
 
 	return nil
@@ -136,27 +164,17 @@ func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.
 		return nil
 	}
 
-	var values []any
-	var placeholders []string
-	i := 1
+	type storageToUpsert struct {
+		address     string
+		slot        string
+		blockNumber uint64
+	}
+	// Initial capacity can be a guess. len(storage) is number of addresses, not total slots.
+	storageToUpdate := make([]storageToUpsert, 0, len(storage))
 	for addr, slots := range storage {
 		for slot, blockNumber := range slots {
-			addressBytes, err := utils.HexToBytes(addr)
-			if err != nil {
-				continue
-			}
-			slotBytes, err := utils.HexToBytes(slot)
-			if err != nil {
-				continue
-			}
-			placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", i, i+1, i+2))
-			values = append(values, addressBytes, slotBytes, blockNumber)
-			i += 3
+			storageToUpdate = append(storageToUpdate, storageToUpsert{address: addr, slot: slot, blockNumber: blockNumber})
 		}
-	}
-
-	if len(placeholders) == 0 {
-		return nil
 	}
 
 	sql := `
@@ -166,11 +184,41 @@ func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.
 		SET last_access_block = EXCLUDED.last_access_block
 		WHERE storage_current.last_access_block < EXCLUDED.last_access_block;
 	`
-	query := fmt.Sprintf(sql, strings.Join(placeholders, ","))
 
-	_, err := tx.Exec(ctx, query, values...)
-	if err != nil {
-		return fmt.Errorf("could not upsert accessed storage in tx: %w", err)
+	for i := 0; i < len(storageToUpdate); i += batchSize {
+		end := i + batchSize
+		if end > len(storageToUpdate) {
+			end = len(storageToUpdate)
+		}
+		batch := storageToUpdate[i:end]
+
+		var values []any
+		var placeholders []string
+		paramIdx := 1
+		for _, s := range batch {
+			addressBytes, err := utils.HexToBytes(s.address)
+			if err != nil {
+				continue
+			}
+			slotBytes, err := utils.HexToBytes(s.slot)
+			if err != nil {
+				continue
+			}
+			placeholders = append(placeholders, fmt.Sprintf("($%d, $%d, $%d)", paramIdx, paramIdx+1, paramIdx+2))
+			values = append(values, addressBytes, slotBytes, s.blockNumber)
+			paramIdx += 3
+		}
+
+		if len(placeholders) == 0 {
+			continue // Nothing to insert in this batch
+		}
+
+		query := fmt.Sprintf(sql, strings.Join(placeholders, ","))
+
+		_, err := tx.Exec(ctx, query, values...)
+		if err != nil {
+			return fmt.Errorf("could not upsert accessed storage in tx: %w", err)
+		}
 	}
 
 	return nil
