@@ -173,12 +173,13 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64, sa *stat
 	}
 
 	if sa.count > defaultCommitSize || force {
+		i.log.Info("Triggering commit", "range_number", rangeNumber, "accounts", len(sa.accounts), "storage", len(sa.storage))
 		// Update database with all blocks in the range in a single transaction
 		if err := i.repo.UpdateRangeDataInTx(ctx, sa.accounts, sa.accountType, sa.storage, rangeNumber); err != nil {
 			return fmt.Errorf("could not update range data for range %d: %w", rangeNumber, err)
 		}
 
-		i.log.Info("Committing range data", "range_number", rangeNumber, "accounts", len(sa.accounts), "storage", len(sa.storage))
+		i.log.Info("Committed range data", "range_number", rangeNumber, "accounts", len(sa.accounts), "storage", len(sa.storage))
 		sa.reset()
 	}
 
