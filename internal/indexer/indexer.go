@@ -100,6 +100,10 @@ func newStateAccess() stateAccess {
 }
 
 func (s *stateAccess) addAccount(addr string, blockNumber uint64, isContract bool) {
+	if _, ok := s.accounts[addr]; !ok {
+		s.count++
+	}
+
 	s.accounts[addr] = blockNumber
 
 	if old, ok := s.accountType[addr]; !ok { // new account
@@ -109,16 +113,18 @@ func (s *stateAccess) addAccount(addr string, blockNumber uint64, isContract boo
 	} else {
 		s.accountType[addr] = isContract
 	}
-
-	s.count++
 }
 
 func (s *stateAccess) addStorage(addr string, slot string, blockNumber uint64) {
 	if _, ok := s.storage[addr]; !ok {
 		s.storage[addr] = make(map[string]uint64)
 	}
+
+	if _, ok := s.storage[addr][slot]; !ok {
+		s.count++
+	}
+
 	s.storage[addr][slot] = blockNumber
-	s.count++
 }
 
 func (s *stateAccess) reset() {
