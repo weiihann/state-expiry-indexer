@@ -1,0 +1,35 @@
+-- Drop indexes on last_access_block for accounts_current partitions
+DROP INDEX IF EXISTS idx_accounts_current_p0_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p1_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p2_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p3_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p4_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p5_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p6_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p7_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p8_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p9_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p10_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p11_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p12_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p13_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p14_last_access_block;
+DROP INDEX IF EXISTS idx_accounts_current_p15_last_access_block;
+
+-- Drop indexes on last_access_block for storage_current partitions
+DROP INDEX IF EXISTS idx_storage_current_p0_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p1_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p2_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p3_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p4_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p5_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p6_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p7_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p8_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p9_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p10_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p11_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p12_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p13_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p14_last_access_block;
+DROP INDEX IF EXISTS idx_storage_current_p15_last_access_block;
