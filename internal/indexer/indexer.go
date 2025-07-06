@@ -14,6 +14,10 @@ import (
 	"github.com/weiihann/state-expiry-indexer/pkg/storage"
 )
 
+const (
+	defaultCommitSize = 1000000
+)
+
 type Indexer struct {
 	repo           *repository.StateRepository
 	rangeProcessor *storage.RangeProcessor
@@ -79,8 +83,53 @@ func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 	return i.repo.UpdateRangeDataInTx(ctx, accessedAccounts, accessedAccountsType, nil, 0)
 }
 
+type stateAccess struct {
+	accounts    map[string]uint64
+	accountType map[string]bool
+	storage     map[string]map[string]uint64
+
+	count int
+}
+
+func newStateAccess() stateAccess {
+	return stateAccess{
+		accounts:    make(map[string]uint64),
+		accountType: make(map[string]bool),
+		storage:     make(map[string]map[string]uint64),
+	}
+}
+
+func (s *stateAccess) addAccount(addr string, blockNumber uint64, isContract bool) {
+	s.accounts[addr] = blockNumber
+
+	if old, ok := s.accountType[addr]; !ok { // new account
+		s.accountType[addr] = isContract
+	} else if !old {
+		s.accountType[addr] = isContract
+	} else {
+		s.accountType[addr] = isContract
+	}
+
+	s.count++
+}
+
+func (s *stateAccess) addStorage(addr string, slot string, blockNumber uint64) {
+	if _, ok := s.storage[addr]; !ok {
+		s.storage[addr] = make(map[string]uint64)
+	}
+	s.storage[addr][slot] = blockNumber
+	s.count++
+}
+
+func (s *stateAccess) reset() {
+	clear(s.accounts)
+	clear(s.accountType)
+	clear(s.storage)
+	s.count = 0
+}
+
 // ProcessRange processes an entire range of blocks
-func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64) error {
+func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64, sa *stateAccess, force bool) error {
 	if rangeNumber == 0 {
 		// Genesis is handled separately
 		return i.ProcessGenesis(ctx)
@@ -110,19 +159,21 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64) error {
 		"blocks_in_range", len(rangeDiffs))
 
 	// Process all blocks in the range and prepare batch data
-	accounts := make(map[string]uint64)
-	accountType := make(map[string]bool)
-	storage := make(map[string]map[string]uint64)
 	for _, rangeDiff := range rangeDiffs {
-		err := i.processBlockDiff(ctx, rangeDiff, accounts, accountType, storage)
+		err := i.processBlockDiff(rangeDiff, sa)
 		if err != nil {
 			return fmt.Errorf("could not process block %d in range %d: %w", rangeDiff.BlockNum, rangeNumber, err)
 		}
 	}
 
-	// Update database with all blocks in the range in a single transaction
-	if err := i.repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, rangeNumber); err != nil {
-		return fmt.Errorf("could not update range data for range %d: %w", rangeNumber, err)
+	if sa.count > defaultCommitSize || force {
+		// Update database with all blocks in the range in a single transaction
+		if err := i.repo.UpdateRangeDataInTx(ctx, sa.accounts, sa.accountType, sa.storage, rangeNumber); err != nil {
+			return fmt.Errorf("could not update range data for range %d: %w", rangeNumber, err)
+		}
+
+		i.log.Info("Committing range data", "range_number", rangeNumber, "accounts", len(sa.accounts), "storage", len(sa.storage))
+		sa.reset()
 	}
 
 	i.log.Info("Successfully processed range",
@@ -135,12 +186,7 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64) error {
 }
 
 // processBlockDiff processes a single block's state diff data and returns the processed data
-func (i *Indexer) processBlockDiff(ctx context.Context,
-	rangeDiff storage.RangeDiffs,
-	accounts map[string]uint64,
-	accountType map[string]bool,
-	storage map[string]map[string]uint64,
-) error {
+func (i *Indexer) processBlockDiff(rangeDiff storage.RangeDiffs, sa *stateAccess) error {
 	blockNumber := rangeDiff.BlockNum
 	stateDiffs := rangeDiff.Diffs
 
@@ -150,26 +196,13 @@ func (i *Indexer) processBlockDiff(ctx context.Context,
 
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
-			accounts[addr] = blockNumber
-
-			// Determine if this account is a contract based on state diff
-			isContract := i.determineAccountType(diff)
-			if old, ok := accountType[addr]; !ok { // new account
-				accountType[addr] = isContract
-			} else if !old {
-				accountType[addr] = isContract
-			} else {
-				accountType[addr] = isContract
-			}
+			sa.addAccount(addr, blockNumber, i.determineAccountType(diff))
 
 			if diff.Storage != nil {
-				if _, ok := storage[addr]; !ok {
-					storage[addr] = make(map[string]uint64)
-				}
 				storageMap, ok := diff.Storage.(map[string]any)
 				if ok {
 					for slot := range storageMap {
-						storage[addr][slot] = blockNumber
+						sa.addStorage(addr, slot, blockNumber)
 					}
 				}
 			}
@@ -178,8 +211,8 @@ func (i *Indexer) processBlockDiff(ctx context.Context,
 
 	i.log.Debug("Processed state access patterns",
 		"block_number", blockNumber,
-		"accessed_accounts_count", len(accounts),
-		"accessed_storage_accounts", len(storage))
+		"accessed_accounts_count", len(sa.accounts),
+		"accessed_storage_accounts", len(sa.storage))
 
 	return nil
 }
@@ -237,8 +270,9 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 	s.log.Debug("Checking for ranges to process", "last_indexed_range", lastIndexedRange)
 
 	// Special case: process genesis if starting from range 0
+	sa := newStateAccess()
 	if lastIndexedRange == 0 {
-		if err := s.indexer.ProcessRange(ctx, 0); err != nil {
+		if err := s.indexer.ProcessRange(ctx, 0, &sa, true); err != nil {
 			return fmt.Errorf("could not process genesis range: %w", err)
 		}
 		s.log.Info("Successfully processed genesis")
@@ -272,7 +306,7 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 		}
 
 		// Process the range
-		if err := s.indexer.ProcessRange(ctx, currentRange); err != nil {
+		if err := s.indexer.ProcessRange(ctx, currentRange, &sa, false); err != nil {
 			return fmt.Errorf("could not process range %d: %w", currentRange, err)
 		}
 
