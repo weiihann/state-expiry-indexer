@@ -68,7 +68,9 @@ func (r *StateRepository) updateLastIndexedRangeInTx(ctx context.Context, tx pgx
 
 // UpdateRangeDataInTx processes all blocks in a range and updates the last indexed range
 func (r *StateRepository) UpdateRangeDataInTx(ctx context.Context,
-	accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64,
+	accounts map[string]uint64,
+	accountType map[string]bool,
+	storage map[string]map[string]uint64,
 	rangeNumber uint64,
 ) error {
 	tx, err := r.db.Begin(ctx)
