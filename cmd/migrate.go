@@ -160,6 +160,33 @@ var migrateVersionCmd = &cobra.Command{
 	},
 }
 
+var migrateForceCmd = &cobra.Command{
+	Use:   "force VERSION",
+	Short: "Force set migration version without running migration (fixes dirty state)",
+	Long:  `Set the migration version without running the migration. This is used to fix dirty database state when a migration fails partway through.`,
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		log := logger.GetLogger("migrate-force")
+
+		m := setupMigrate()
+		defer m.Close()
+
+		version, err := strconv.Atoi(args[0])
+		if err != nil {
+			log.Error("Invalid version number", "error", err, "input", args[0])
+			os.Exit(1)
+		}
+
+		if err := m.Force(version); err != nil {
+			log.Error("Failed to force migration version", "error", err, "version", version)
+			os.Exit(1)
+		}
+
+		log.Info("Migration version forced successfully", "version", version)
+		log.Warn("IMPORTANT: Verify that the database state matches the expected state for this version")
+	},
+}
+
 func setupMigrate() *migrate.Migrate {
 	log := logger.GetLogger("migrate-setup")
 
@@ -200,6 +227,7 @@ func init() {
 	migrateCmd.AddCommand(migrateDownCmd)
 	migrateCmd.AddCommand(migrateStatusCmd)
 	migrateCmd.AddCommand(migrateVersionCmd)
+	migrateCmd.AddCommand(migrateForceCmd)
 	rootCmd.AddCommand(migrateCmd)
 }
 
