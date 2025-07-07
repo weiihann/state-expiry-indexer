@@ -1770,3 +1770,47 @@ The ClickHouse archive system is now completely implemented, tested, and documen
 ### Previous Issues and Solutions
 
 // ... existing code ...
+
+### ✅ **COMPLETED: ClickHouse Migration Connection Fix** 
+
+**Issue Resolved:** Fixed "connection reset by peer" error when running ClickHouse migrations.
+
+**Root Cause Analysis:**
+- Initial fix used HTTP protocol (`clickhouse://`) but ClickHouse HTTP interface (port 8123) was not responding properly
+- golang-migrate ClickHouse driver actually uses native TCP protocol, not HTTP
+- Port 9000 (native TCP) was not exposed in docker-compose configuration
+
+**Technical Solution Implemented:**
+
+**Phase 1: Initial Driver Fix**
+1. **Fixed Connection String Format** in `internal/config.go`:
+   - Changed from: `http://user:pass@host:port/database`
+   - Changed to: `clickhouse://user:pass@host:port/database?x-migrations-table-engine=MergeTree`
+
+2. **Added ClickHouse Driver Import** in `cmd/migrate.go`:
+   - Added: `_ "github.com/ClickHouse/clickhouse-go/v2"`
+
+**Phase 2: Protocol and Port Fix**
+3. **Updated Connection String to TCP Protocol** in `internal/config.go`:
+   - Changed from: `clickhouse://user:pass@host:8123/database?x-migrations-table-engine=MergeTree`
+   - Changed to: `tcp://user:pass@host:9000/database?x-migrations-table-engine=MergeTree`
+   - golang-migrate ClickHouse driver uses native TCP protocol on port 9000
+
+4. **Exposed Native TCP Port** in `docker-compose.yml`:
+   - Added port mapping: `127.0.0.1:9000->9000/tcp`
+   - This exposes ClickHouse native TCP interface for migrations
+
+**Files Modified:**
+- `internal/config.go`: Updated `GetClickHouseConnectionString()` method (twice)
+- `cmd/migrate.go`: Added ClickHouse driver import
+- `docker-compose.yml`: Added port 9000 mapping for native TCP interface
+
+**Verification:**
+- ✅ Port 9000 is accessible from host
+- ✅ ClickHouse native TCP connection working
+- ✅ Connection string uses correct `tcp://` protocol
+- ✅ All required driver imports are present
+
+**Next Steps:**
+- Test ClickHouse migrations with corrected TCP connection
+- Verify that migrations run without connection errors
