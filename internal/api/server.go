@@ -13,18 +13,23 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
+	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
 )
 
 type Server struct {
-	repo   *repository.StateRepository
-	log    *slog.Logger
-	server *http.Server
+	repo      *repository.StateRepository
+	rpcClient *rpc.Client
+	rangeSize uint64
+	log       *slog.Logger
+	server    *http.Server
 }
 
-func NewServer(repo *repository.StateRepository) *Server {
+func NewServer(repo *repository.StateRepository, rpcClient *rpc.Client, rangeSize uint64) *Server {
 	return &Server{
-		repo: repo,
-		log:  logger.GetLogger("api-server"),
+		repo:      repo,
+		rpcClient: rpcClient,
+		rangeSize: rangeSize,
+		log:       logger.GetLogger("api-server"),
 	}
 }
 
@@ -41,6 +46,7 @@ func (s *Server) Run(ctx context.Context, host string, port int) error {
 		r.Get("/lookup", s.handleStateLookup)
 		r.Get("/account-type", s.handleGetAccountType)
 		r.Get("/accounts", s.handleGetAccounts)
+		r.Get("/sync", s.handleGetSyncStatus)
 	})
 
 	s.server = &http.Server{
@@ -321,4 +327,47 @@ func (s *Server) handleGetAccounts(w http.ResponseWriter, r *http.Request) {
 		"returned_count", len(accounts),
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, accounts)
+}
+
+func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
+	// Get the latest block number from the RPC client
+	latestBlockBig, err := s.rpcClient.GetLatestBlockNumber(r.Context())
+	if err != nil {
+		s.log.Error("Failed to get latest block number from RPC",
+			"error", err,
+			"remote_addr", r.RemoteAddr)
+		respondWithError(w, http.StatusInternalServerError, "Could not get latest block number")
+		return
+	}
+
+	latestBlock := latestBlockBig.Uint64()
+	
+	// Calculate the latest range number
+	// Range calculation: for block 0 (genesis) = range 0, for others = (blockNumber - 1) / rangeSize
+	var latestRange uint64
+	if latestBlock == 0 {
+		latestRange = 0
+	} else {
+		latestRange = (latestBlock-1)/s.rangeSize + 1
+	}
+
+	// Get sync status from repository
+	syncStatus, err := s.repo.GetSyncStatus(r.Context(), latestRange, s.rangeSize)
+	if err != nil {
+		s.log.Error("Failed to get sync status",
+			"error", err,
+			"latest_range", latestRange,
+			"remote_addr", r.RemoteAddr)
+		respondWithError(w, http.StatusInternalServerError, "Could not get sync status")
+		return
+	}
+
+	s.log.Debug("Served sync status",
+		"latest_block", latestBlock,
+		"latest_range", latestRange,
+		"last_indexed_range", syncStatus.LastIndexedRange,
+		"is_synced", syncStatus.IsSynced,
+		"end_block", syncStatus.EndBlock,
+		"remote_addr", r.RemoteAddr)
+	respondWithJSON(w, http.StatusOK, syncStatus)
 }

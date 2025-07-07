@@ -116,7 +116,7 @@ func run(cmd *cobra.Command, args []string) {
 
 	// Initialize API server
 	log.Info("Initializing API server...", "host", config.APIHost, "port", config.APIPort)
-	apiServer = api.NewServer(repo)
+	apiServer = api.NewServer(repo, rpcClient, uint64(config.RangeSize))
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(ctx)
