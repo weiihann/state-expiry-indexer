@@ -545,9 +545,11 @@ func (r *StateRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint
 		return nil, fmt.Errorf("failed to get storage expiry analysis: %w", err)
 	}
 
-	// Get active contracts with expired storage analysis
-	if err := r.getActiveContractsExpiredStorageAnalysis(ctx, expiryBlock, &analytics.ActiveContractsExpiredStorage); err != nil {
-		return nil, fmt.Errorf("failed to get active contracts expired storage analysis: %w", err)
+	// Temporarily skip active contracts with expired storage analysis
+	// Set default empty values to avoid nil in response
+	analytics.ActiveContractsExpiredStorage = ActiveContractsExpiredStorageAnalysis{
+		ThresholdAnalysis:    []ExpiredStorageThreshold{},
+		TotalActiveContracts: 0,
 	}
 
 	// Get complete expiry analysis
@@ -846,22 +848,27 @@ func (r *StateRepository) getExpiryDistributionBuckets(ctx context.Context, expi
 }
 
 // Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
+// NOTE: This function is temporarily disabled due to memory issues with large datasets.
+// The GetAnalyticsData method now returns empty data for this section.
 func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
-	// Memory-efficient approach: Get threshold analysis with row-based results instead of json_agg
+	// Memory-efficient approach: Avoid JOIN by using subqueries and window functions
 	thresholdQuery := `
-		WITH contract_storage_analysis AS (
+		WITH contract_storage_stats AS (
 			SELECT 
 				s.address,
-				a.last_access_block as account_last_access,
 				COUNT(s.slot_key) as total_slots,
 				COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1) as expired_slots,
 				(COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1)::float / COUNT(s.slot_key)::float * 100) as expiry_percentage
 			FROM storage_current s
-			INNER JOIN accounts_current a ON s.address = a.address
-			WHERE a.is_contract = true
-			GROUP BY s.address, a.last_access_block
+			WHERE EXISTS (
+				SELECT 1 FROM accounts_current a 
+				WHERE a.address = s.address 
+				AND a.is_contract = true 
+				AND a.last_access_block >= $1
+			)
+			GROUP BY s.address
 		),
-		threshold_analysis AS (
+		threshold_buckets AS (
 			SELECT 
 				CASE 
 					WHEN expiry_percentage = 0 THEN '0%'
@@ -870,15 +877,14 @@ func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.C
 					WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN '51-80%'
 					WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN '81-99%'
 					ELSE '100%'
-				END as threshold_range,
-				COUNT(*) FILTER (WHERE account_last_access >= $1) as active_contract_count
-			FROM contract_storage_analysis
-			GROUP BY threshold_range
+				END as threshold_range
+			FROM contract_storage_stats
 		)
 		SELECT 
 			threshold_range,
-			active_contract_count
-		FROM threshold_analysis
+			COUNT(*) as active_contract_count
+		FROM threshold_buckets
+		GROUP BY threshold_range
 		ORDER BY 
 			CASE threshold_range
 				WHEN '0%' THEN 1
@@ -890,20 +896,16 @@ func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.C
 			END
 	`
 
-	// Get total active contracts count first
+	// Get total active contracts count first - optimized to avoid JOIN and GROUP BY
 	totalActiveQuery := `
-		WITH contract_storage_analysis AS (
-			SELECT 
-				s.address,
-				a.last_access_block as account_last_access
-			FROM storage_current s
-			INNER JOIN accounts_current a ON s.address = a.address
-			WHERE a.is_contract = true
-			GROUP BY s.address, a.last_access_block
-		)
-		SELECT COUNT(*) as total_active_contracts
-		FROM contract_storage_analysis
-		WHERE account_last_access >= $1
+		SELECT COUNT(DISTINCT a.address) as total_active_contracts
+		FROM accounts_current a
+		WHERE a.is_contract = true 
+		  AND a.last_access_block >= $1
+		  AND EXISTS (
+			  SELECT 1 FROM storage_current s 
+			  WHERE s.address = a.address
+		  )
 	`
 
 	var totalActiveContracts int
