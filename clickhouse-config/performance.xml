@@ -5,11 +5,6 @@
     <max_memory_usage_for_user>107374182400</max_memory_usage_for_user>
     <max_server_memory_usage>107374182400</max_server_memory_usage>
     
-    <!-- Increase buffer sizes for large inserts -->
-    <max_insert_block_size>1048576</max_insert_block_size>  <!-- 1M rows per block -->
-    <min_insert_block_size_rows>262144</min_insert_block_size_rows>  <!-- 256K rows -->
-    <min_insert_block_size_bytes>268435456</min_insert_block_size_bytes>  <!-- 256MB -->
-    
     <!-- Query Performance Settings -->
     <max_threads>0</max_threads>  <!-- 0 = auto-detect CPU cores -->
     <max_query_size>1073741824</max_query_size>  <!-- 1GB query size limit -->
@@ -41,7 +36,6 @@
     <merge_tree>
         <max_bytes_to_merge_at_max_space_in_pool>161061273600</max_bytes_to_merge_at_max_space_in_pool>  <!-- 150GB -->
         <max_bytes_to_merge_at_min_space_in_pool>1048576</max_bytes_to_merge_at_min_space_in_pool>  <!-- 1MB -->
-        <merge_max_block_size>8192</merge_max_block_size>
         <max_part_loading_threads>0</max_part_loading_threads>  <!-- auto-detect -->
         <max_part_removal_threads>0</max_part_removal_threads>  <!-- auto-detect -->
         <parts_to_delay_insert>1000</parts_to_delay_insert>
