@@ -1,0 +1,46 @@
+package repository
+
+import (
+	"context"
+
+	"github.com/weiihann/state-expiry-indexer/internal"
+	"github.com/weiihann/state-expiry-indexer/internal/database"
+)
+
+// StateRepositoryInterface defines the contract for state repository implementations
+type StateRepositoryInterface interface {
+	// Range-based processing methods (used by indexer)
+	GetLastIndexedRange(ctx context.Context) (uint64, error)
+	UpdateRangeDataInTx(ctx context.Context, accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64, rangeNumber uint64) error
+
+	// API query methods (used by API server)
+	GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error)
+	GetAccountInfo(ctx context.Context, address string) (*Account, error)
+	GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
+	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error)
+
+	// Additional query methods (for completeness)
+	GetExpiredStateCount(ctx context.Context, expiryBlock uint64) (int, error)
+	GetTopNExpiredContracts(ctx context.Context, expiryBlock uint64, n int) ([]Contract, error)
+	GetAccountType(ctx context.Context, address string) (*bool, error)
+	GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error)
+}
+
+// NewRepository creates the appropriate repository implementation based on configuration
+func NewRepository(ctx context.Context, config internal.Config) (StateRepositoryInterface, error) {
+	if config.ArchiveMode {
+		// ClickHouse archive mode
+		db, err := database.ConnectClickHouse(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		return NewClickHouseRepository(db), nil
+	} else {
+		// PostgreSQL default mode
+		db, err := database.Connect(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		return NewPostgreSQLRepository(db), nil
+	}
+}

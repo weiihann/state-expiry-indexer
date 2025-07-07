@@ -121,15 +121,26 @@ type CompleteExpiryAnalysis struct {
 	FullyExpiredPercentage    float64 `json:"fully_expired_percentage"`
 }
 
-type StateRepository struct {
+// PostgreSQLRepository implements StateRepositoryInterface for PostgreSQL
+type PostgreSQLRepository struct {
 	db *pgxpool.Pool
 }
 
-func NewStateRepository(db *pgxpool.Pool) *StateRepository {
-	return &StateRepository{db: db}
+// Ensure PostgreSQLRepository implements StateRepositoryInterface
+var _ StateRepositoryInterface = (*PostgreSQLRepository)(nil)
+
+func NewPostgreSQLRepository(db *pgxpool.Pool) *PostgreSQLRepository {
+	return &PostgreSQLRepository{db: db}
 }
 
-func (r *StateRepository) GetLastIndexedRange(ctx context.Context) (uint64, error) {
+// StateRepository is the legacy name - now an alias for backward compatibility
+type StateRepository = PostgreSQLRepository
+
+func NewStateRepository(db *pgxpool.Pool) *StateRepository {
+	return NewPostgreSQLRepository(db)
+}
+
+func (r *PostgreSQLRepository) GetLastIndexedRange(ctx context.Context) (uint64, error) {
 	var value string
 	err := r.db.QueryRow(ctx, "SELECT value FROM metadata WHERE key = 'last_indexed_range'").Scan(&value)
 	if err != nil {
@@ -148,7 +159,7 @@ func (r *StateRepository) GetLastIndexedRange(ctx context.Context) (uint64, erro
 	return rangeNumber, nil
 }
 
-func (r *StateRepository) updateLastIndexedRangeInTx(ctx context.Context, tx pgx.Tx, rangeNumber uint64) error {
+func (r *PostgreSQLRepository) updateLastIndexedRangeInTx(ctx context.Context, tx pgx.Tx, rangeNumber uint64) error {
 	sql := `INSERT INTO metadata (key, value) VALUES ('last_indexed_range', $1) 
 		ON CONFLICT (key) DO UPDATE SET value = $1`
 	if _, err := tx.Exec(ctx, sql, fmt.Sprintf("%d", rangeNumber)); err != nil {
@@ -158,7 +169,7 @@ func (r *StateRepository) updateLastIndexedRangeInTx(ctx context.Context, tx pgx
 }
 
 // UpdateRangeDataInTx processes all blocks in a range and updates the last indexed range
-func (r *StateRepository) UpdateRangeDataInTx(ctx context.Context,
+func (r *PostgreSQLRepository) UpdateRangeDataInTx(ctx context.Context,
 	accounts map[string]uint64,
 	accountType map[string]bool,
 	storage map[string]map[string]uint64,
@@ -193,7 +204,7 @@ type BlockData struct {
 	Storage     map[string]map[string]struct{}
 }
 
-func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, accounts map[string]uint64, accountType map[string]bool) error {
+func (r *PostgreSQLRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, accounts map[string]uint64, accountType map[string]bool) error {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -252,7 +263,7 @@ func (r *StateRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx
 	return nil
 }
 
-func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, storage map[string]map[string]uint64) error {
+func (r *PostgreSQLRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.Tx, storage map[string]map[string]uint64) error {
 	if len(storage) == 0 {
 		return nil
 	}
@@ -317,7 +328,7 @@ func (r *StateRepository) upsertAccessedStorageInTx(ctx context.Context, tx pgx.
 	return nil
 }
 
-func (r *StateRepository) GetExpiredStateCount(ctx context.Context, expiryBlock uint64) (int, error) {
+func (r *PostgreSQLRepository) GetExpiredStateCount(ctx context.Context, expiryBlock uint64) (int, error) {
 	var accountCount int
 	accountQuery := `SELECT COUNT(*) FROM accounts_current WHERE last_access_block < $1;`
 	err := r.db.QueryRow(ctx, accountQuery, expiryBlock).Scan(&accountCount)
@@ -335,7 +346,7 @@ func (r *StateRepository) GetExpiredStateCount(ctx context.Context, expiryBlock 
 	return accountCount + storageCount, nil
 }
 
-func (r *StateRepository) GetTopNExpiredContracts(ctx context.Context, expiryBlock uint64, n int) ([]Contract, error) {
+func (r *PostgreSQLRepository) GetTopNExpiredContracts(ctx context.Context, expiryBlock uint64, n int) ([]Contract, error) {
 	query := `
 		SELECT
 			address,
@@ -375,7 +386,7 @@ func (r *StateRepository) GetTopNExpiredContracts(ctx context.Context, expiryBlo
 	return contracts, nil
 }
 
-func (r *StateRepository) GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error) {
+func (r *PostgreSQLRepository) GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error) {
 	var lastAccessBlock uint64
 	var err error
 
@@ -408,7 +419,7 @@ func (r *StateRepository) GetStateLastAccessedBlock(ctx context.Context, address
 	return lastAccessBlock, nil
 }
 
-func (r *StateRepository) GetAccountType(ctx context.Context, address string) (*bool, error) {
+func (r *PostgreSQLRepository) GetAccountType(ctx context.Context, address string) (*bool, error) {
 	addressBytes, err := utils.HexToBytes(address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address hex: %w", err)
@@ -427,7 +438,7 @@ func (r *StateRepository) GetAccountType(ctx context.Context, address string) (*
 	return isContract, nil
 }
 
-func (r *StateRepository) GetAccountInfo(ctx context.Context, address string) (*Account, error) {
+func (r *PostgreSQLRepository) GetAccountInfo(ctx context.Context, address string) (*Account, error) {
 	addressBytes, err := utils.HexToBytes(address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address hex: %w", err)
@@ -452,7 +463,7 @@ func (r *StateRepository) GetAccountInfo(ctx context.Context, address string) (*
 	return &account, nil
 }
 
-func (r *StateRepository) GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error) {
+func (r *PostgreSQLRepository) GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error) {
 	var query string
 	var args []any
 
@@ -496,7 +507,7 @@ type SyncStatus struct {
 	EndBlock         uint64 `json:"end_block"`
 }
 
-func (r *StateRepository) GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error) {
+func (r *PostgreSQLRepository) GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error) {
 	lastIndexedRange, err := r.GetLastIndexedRange(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not get last indexed range: %w", err)
@@ -521,7 +532,7 @@ func (r *StateRepository) GetSyncStatus(ctx context.Context, latestRange uint64,
 
 // GetAnalyticsData returns comprehensive analytics for all questions with optimized single-query approach
 // This method executes a single comprehensive base query and derives all analytics for maximum efficiency
-func (r *StateRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error) {
+func (r *PostgreSQLRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error) {
 	analytics := &AnalyticsData{}
 
 	// Get base statistics with a single optimized query
@@ -584,7 +595,7 @@ func (bs *BaseStatistics) ExpiredAccounts() int {
 }
 
 // getBaseStatistics retrieves all basic statistics in a single optimized query
-func (r *StateRepository) getBaseStatistics(ctx context.Context, expiryBlock uint64) (*BaseStatistics, error) {
+func (r *PostgreSQLRepository) getBaseStatistics(ctx context.Context, expiryBlock uint64) (*BaseStatistics, error) {
 	query := `
 		WITH account_stats AS (
 			SELECT 
@@ -627,7 +638,7 @@ func (r *StateRepository) getBaseStatistics(ctx context.Context, expiryBlock uin
 }
 
 // deriveAccountExpiryAnalysis derives account expiry analysis from base statistics
-func (r *StateRepository) deriveAccountExpiryAnalysis(stats *BaseStatistics) AccountExpiryAnalysis {
+func (r *PostgreSQLRepository) deriveAccountExpiryAnalysis(stats *BaseStatistics) AccountExpiryAnalysis {
 	result := AccountExpiryAnalysis{
 		ExpiredEOAs:          stats.ExpiredEOAs,
 		ExpiredContracts:     stats.ExpiredContracts,
@@ -652,7 +663,7 @@ func (r *StateRepository) deriveAccountExpiryAnalysis(stats *BaseStatistics) Acc
 }
 
 // deriveAccountDistributionAnalysis derives account distribution analysis from base statistics
-func (r *StateRepository) deriveAccountDistributionAnalysis(stats *BaseStatistics) AccountDistributionAnalysis {
+func (r *PostgreSQLRepository) deriveAccountDistributionAnalysis(stats *BaseStatistics) AccountDistributionAnalysis {
 	result := AccountDistributionAnalysis{
 		TotalExpiredAccounts: stats.ExpiredAccounts(),
 	}
@@ -667,7 +678,7 @@ func (r *StateRepository) deriveAccountDistributionAnalysis(stats *BaseStatistic
 }
 
 // deriveStorageSlotExpiryAnalysis derives storage slot expiry analysis from base statistics
-func (r *StateRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatistics) StorageSlotExpiryAnalysis {
+func (r *PostgreSQLRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatistics) StorageSlotExpiryAnalysis {
 	result := StorageSlotExpiryAnalysis{
 		ExpiredSlots: stats.ExpiredSlots,
 		TotalSlots:   stats.TotalSlots,
@@ -682,7 +693,7 @@ func (r *StateRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatistics)
 }
 
 // Question 4: What are the top 10 contracts with the largest expired state footprint?
-func (r *StateRepository) getContractStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ContractStorageAnalysis) error {
+func (r *PostgreSQLRepository) getContractStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ContractStorageAnalysis) error {
 	query := `
 		WITH contract_storage_stats AS (
 			SELECT 
@@ -733,7 +744,7 @@ func (r *StateRepository) getContractStorageAnalysis(ctx context.Context, expiry
 }
 
 // Questions 5 & 6: Storage expiry analysis and fully expired contracts (Optimized)
-func (r *StateRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBlock uint64, storageResult *StorageExpiryAnalysis, fullyExpiredResult *FullyExpiredContractsAnalysis) error {
+func (r *PostgreSQLRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBlock uint64, storageResult *StorageExpiryAnalysis, fullyExpiredResult *FullyExpiredContractsAnalysis) error {
 	// Simplified query that avoids complex JSON aggregation
 	query := `
 		WITH contract_expiry_stats AS (
@@ -784,7 +795,7 @@ func (r *StateRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBl
 }
 
 // getExpiryDistributionBuckets gets distribution buckets with a simpler query
-func (r *StateRepository) getExpiryDistributionBuckets(ctx context.Context, expiryBlock uint64) ([]ExpiryPercentageBucket, error) {
+func (r *PostgreSQLRepository) getExpiryDistributionBuckets(ctx context.Context, expiryBlock uint64) ([]ExpiryPercentageBucket, error) {
 	query := `
 		WITH contract_expiry_stats AS (
 			SELECT 
@@ -850,7 +861,7 @@ func (r *StateRepository) getExpiryDistributionBuckets(ctx context.Context, expi
 // Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
 // NOTE: This function is temporarily disabled due to memory issues with large datasets.
 // The GetAnalyticsData method now returns empty data for this section.
-func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
+func (r *PostgreSQLRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
 	// Memory-efficient approach: Avoid JOIN by using subqueries and window functions
 	thresholdQuery := `
 		WITH contract_storage_stats AS (
@@ -952,7 +963,7 @@ func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.C
 }
 
 // Question 9: How many contracts are fully expired at both account and storage levels?
-func (r *StateRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
+func (r *PostgreSQLRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
 	query := `
 		WITH fully_expired_storage_contracts AS (
 			SELECT DISTINCT s.address
