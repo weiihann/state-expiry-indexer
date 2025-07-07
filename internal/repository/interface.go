@@ -14,16 +14,8 @@ type StateRepositoryInterface interface {
 	UpdateRangeDataInTx(ctx context.Context, accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64, rangeNumber uint64) error
 
 	// API query methods (used by API server)
-	GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error)
-	GetAccountInfo(ctx context.Context, address string) (*Account, error)
 	GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
 	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error)
-
-	// Additional query methods (for completeness)
-	GetExpiredStateCount(ctx context.Context, expiryBlock uint64) (int, error)
-	GetTopNExpiredContracts(ctx context.Context, expiryBlock uint64, n int) ([]Contract, error)
-	GetAccountType(ctx context.Context, address string) (*bool, error)
-	GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error)
 }
 
 // NewRepository creates the appropriate repository implementation based on configuration
