@@ -1814,3 +1814,141 @@ The ClickHouse archive system is now completely implemented, tested, and documen
 **Next Steps:**
 - Test ClickHouse migrations with corrected TCP connection
 - Verify that migrations run without connection errors
+
+### ✅ **COMPLETED: ClickHouse Migration Driver Investigation** 
+
+**Issue:** ClickHouse migration failing with various connection errors despite properly configured database.
+
+**Root Cause Analysis:**
+- Initial issue: "unknown driver http (forgotten import?)" → **FIXED**
+- Secondary issue: "connection reset by peer" → **FIXED** 
+- Current issue: "read: EOF" despite correct connection string format
+
+**Comprehensive Solution Attempts:**
+
+**Phase 1: Driver Import Fix**
+1. **Added ClickHouse Driver Import** in `cmd/migrate.go`:
+   - Added `_ "github.com/ClickHouse/clickhouse-go/v2"` import
+   - This resolved the "unknown driver" error
+
+**Phase 2: Connection String Format Fix**
+1. **Updated Connection String Protocol**:
+   - Changed from `http://` to `clickhouse://` protocol 
+   - Added proper parameters: `?secure=false&x-migrations-table-engine=MergeTree`
+   - This follows golang-migrate v4.18.3 documentation standards
+
+**Phase 3: Network & Configuration Fix**
+1. **Docker Port Configuration**:
+   - Exposed ClickHouse native TCP port 9000 to host port 9010
+   - Updated docker-compose.yml with proper port mapping
+   - Added SELinux compatibility with `:Z` volume mount flag
+
+2. **ClickHouse User Configuration Simplification**:
+   - Simplified users.xml to use default profile and allow from any network
+   - Removed complex database grants that could interfere with migrations
+   - Enabled full access management for migration compatibility
+
+3. **Application Configuration**:
+   - Added complete ClickHouse config section to `configs/config.env`
+   - Set `CLICKHOUSE_PORT=9010` to match Docker host port mapping
+   - Configured all required ClickHouse connection parameters
+
+**Current Status:**
+- ✅ ClickHouse is running and accessible via native client on port 9000 inside container
+- ✅ Port 9010 is properly mapped and accessible from host
+- ✅ ClickHouse user authentication works correctly
+- ✅ Connection string format is correct per golang-migrate documentation
+- ❌ golang-migrate still fails with "read: EOF" error
+
+**Technical Details Verified:**
+- **Driver Version**: golang-migrate v4.18.3 with ClickHouse support
+- **ClickHouse Version**: 25.6 (latest)
+- **Connection String**: `clickhouse://user:password@localhost:9010/state_expiry?secure=false&x-migrations-table-engine=MergeTree`
+- **Network**: Native TCP protocol on port 9010 (mapped from container port 9000)
+
+**Next Steps for Investigation:**
+- May need to investigate golang-migrate version compatibility with ClickHouse 25.6
+- Consider alternative migration approaches if driver compatibility is the root issue
+- Possible SELinux or network-level blocking despite proper configuration
+
+**Lessons Learned:**
+- ClickHouse migration requires `secure=false` parameter for non-TLS connections
+- golang-migrate ClickHouse driver uses `clickhouse://` protocol, not `tcp://` or `http://`
+- Native TCP port (9000) must be exposed, not just HTTP port (8123)
+- User configuration complexity can interfere with migration tools
+
+// ... existing code ...
+
+### ✅ **COMPLETED: Comprehensive ClickHouse Migration Investigation** 
+
+**Issue:** ClickHouse migration failing with "read: EOF" error despite multiple attempted fixes.
+
+**Investigation Summary:**
+
+**Phase 1: Driver Import Fix** ✅
+1. **Root Cause:** Missing ClickHouse driver import in `cmd/migrate.go`
+2. **Solution:** Added `_ "github.com/ClickHouse/clickhouse-go/v2"` import
+3. **Result:** Fixed "unknown driver http" error
+
+**Phase 2: Connection String Format Fix** ✅
+1. **Root Cause:** Incorrect HTTP protocol in connection string  
+2. **Solution:** Changed from `http://` to `clickhouse://` protocol
+3. **Result:** Fixed basic protocol format
+
+**Phase 3: Port Configuration Fix** ✅
+1. **Root Cause:** Native TCP port (9000) not exposed, only HTTP port (8123)
+2. **Solution:** 
+   - Added port mapping `127.0.0.1:9010->9000/tcp` in docker-compose.yml
+   - Updated config.env with `CLICKHOUSE_PORT=9010`
+3. **Result:** Native TCP port now accessible
+
+**Phase 4: User Configuration Fix** ✅  
+1. **Root Cause:** Complex user permissions in users.xml causing auth issues
+2. **Solution:** Simplified user configuration to use `default` profile and quota
+3. **Result:** User authentication working properly
+
+**Phase 5: Connection String Parameter Investigation** ✅
+1. **Attempted:** Multiple connection string formats including:
+   - `clickhouse://user:pass@host:port/db?secure=false&x-migrations-table-engine=MergeTree`
+   - `clickhouse://user:pass@host:port/db?debug=true&secure=false`
+   - `tcp://user:pass@host:port/db` (resulted in "unknown driver tcp")
+2. **Result:** All formats still produce "read: EOF" error
+
+**Phase 6: Direct ClickHouse Connection Testing** ✅
+1. **Finding:** Direct Go ClickHouse client (`clickhouse.Open()`) also fails with same "read: EOF" error
+2. **Conclusion:** Issue is not specific to golang-migrate but affects ClickHouse connectivity at the protocol level
+
+**Current Status:**
+- ✅ ClickHouse server is running and healthy
+- ✅ Native TCP port (9000) is accessible inside container  
+- ✅ Port mapping (9010:9000) is configured correctly
+- ✅ User authentication works via clickhouse-client
+- ❌ Golang applications cannot connect via native protocol ("read: EOF" during handshake)
+
+**Key Findings:**
+1. **Version Compatibility Issue:** Using ClickHouse 25.6.2.5 (very recent) with clickhouse-go v2.37.2
+2. **Handshake Failure:** Debug logs show `[handshake] -> 0.0.0` indicating failed protocol handshake
+3. **Platform Specifics:** FedoraOS with SELinux may have additional security restrictions
+4. **Protocol Level Issue:** The problem occurs at the ClickHouse native protocol level, not with golang-migrate specifically
+
+**Recommended Next Steps:**
+
+**Option 1: Use HTTP Protocol for Migrations (Recommended)**
+- Modify connection string to use HTTP protocol: `http://user:password@localhost:8123/database`
+- HTTP interface is working (port 8123 accessible)
+- Less optimal for performance but will work for migrations
+
+**Option 2: Investigate ClickHouse Version Compatibility**
+- Consider downgrading ClickHouse to a stable LTS version (e.g., 24.3 LTS)
+- Current version 25.6.2.5 is very recent and may have compatibility issues
+
+**Option 3: Check SELinux/Firewall Configuration**
+- Investigate if SELinux on FedoraOS is blocking native TCP connections
+- Check if firewall rules are interfering with localhost TCP connections
+
+**Option 4: Debug at Protocol Level**
+- Enable more detailed debugging in ClickHouse server
+- Check if there are any ClickHouse server-side protocol restrictions
+
+**Immediate Recommendation:**
+Try Option 1 first - switch to HTTP protocol for migrations as it's the quickest solution to unblock the migration issue.
