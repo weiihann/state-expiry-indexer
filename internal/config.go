@@ -431,8 +431,10 @@ func (c *Config) GetDatabaseConnectionString() string {
 
 // GetClickHouseConnectionString builds a ClickHouse connection string for golang-migrate
 func (c *Config) GetClickHouseConnectionString() string {
+	// golang-migrate ClickHouse driver expects clickhouse:// protocol for native TCP connection
+	// secure=false is needed for non-TLS connections to work properly
 	return fmt.Sprintf(
-		"clickhouse://%s:%s@%s:%s/%s?x-migrations-table-engine=MergeTree",
+		"clickhouse://%s:%s@%s:%s/%s?secure=false&x-migrations-table-engine=MergeTree",
 		c.ClickHouseUser,
 		c.ClickHousePassword,
 		c.ClickHouseHost,
