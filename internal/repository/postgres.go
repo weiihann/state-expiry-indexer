@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -28,6 +29,97 @@ type Account struct {
 	Address         string `json:"address"`
 	LastAccessBlock uint64 `json:"last_access_block"`
 	IsContract      *bool  `json:"is_contract,omitempty"`
+}
+
+// Analytics data structures for comprehensive state expiry analysis
+type AnalyticsData struct {
+	AccountExpiry                 AccountExpiryAnalysis                 `json:"account_expiry"`
+	AccountDistribution           AccountDistributionAnalysis           `json:"account_distribution"`
+	StorageSlotExpiry             StorageSlotExpiryAnalysis             `json:"storage_slot_expiry"`
+	ContractStorage               ContractStorageAnalysis               `json:"contract_storage"`
+	StorageExpiry                 StorageExpiryAnalysis                 `json:"storage_expiry"`
+	FullyExpiredContracts         FullyExpiredContractsAnalysis         `json:"fully_expired_contracts"`
+	ActiveContractsExpiredStorage ActiveContractsExpiredStorageAnalysis `json:"active_contracts_expired_storage"`
+	CompleteExpiry                CompleteExpiryAnalysis                `json:"complete_expiry"`
+}
+
+// Question 1: How many accounts are expired (separated by EOA and contract)?
+type AccountExpiryAnalysis struct {
+	ExpiredEOAs               int     `json:"expired_eoas"`
+	ExpiredContracts          int     `json:"expired_contracts"`
+	TotalExpiredAccounts      int     `json:"total_expired_accounts"`
+	TotalEOAs                 int     `json:"total_eoas"`
+	TotalContracts            int     `json:"total_contracts"`
+	TotalAccounts             int     `json:"total_accounts"`
+	ExpiredEOAPercentage      float64 `json:"expired_eoa_percentage"`
+	ExpiredContractPercentage float64 `json:"expired_contract_percentage"`
+	TotalExpiredPercentage    float64 `json:"total_expired_percentage"`
+}
+
+// Question 2: What percentage of expired accounts are contracts vs EOAs?
+type AccountDistributionAnalysis struct {
+	ContractPercentage   float64 `json:"contract_percentage"`
+	EOAPercentage        float64 `json:"eoa_percentage"`
+	TotalExpiredAccounts int     `json:"total_expired_accounts"`
+}
+
+// New Question: What percentage of storage slots are expired?
+type StorageSlotExpiryAnalysis struct {
+	ExpiredSlots          int     `json:"expired_slots"`
+	TotalSlots            int     `json:"total_slots"`
+	ExpiredSlotPercentage float64 `json:"expired_slot_percentage"`
+}
+
+// Question 4: What are the top 10 contracts with the largest expired state footprint?
+type ContractStorageAnalysis struct {
+	TopExpiredContracts []ExpiredContract `json:"top_expired_contracts"`
+}
+
+type ExpiredContract struct {
+	Address          string  `json:"address"`
+	ExpiredSlotCount int     `json:"expired_slot_count"`
+	TotalSlotCount   int     `json:"total_slot_count"`
+	ExpiryPercentage float64 `json:"expiry_percentage"`
+}
+
+// Question 5: What percentage of a contract's total storage is expired?
+// Question 6: How many contracts where all slots are expired?
+type StorageExpiryAnalysis struct {
+	AverageExpiryPercentage float64                  `json:"average_expiry_percentage"`
+	MedianExpiryPercentage  float64                  `json:"median_expiry_percentage"`
+	ExpiryDistribution      []ExpiryPercentageBucket `json:"expiry_distribution"`
+	ContractsAnalyzed       int                      `json:"contracts_analyzed"`
+}
+
+type FullyExpiredContractsAnalysis struct {
+	FullyExpiredContractCount int     `json:"fully_expired_contract_count"`
+	TotalContractsWithStorage int     `json:"total_contracts_with_storage"`
+	FullyExpiredPercentage    float64 `json:"fully_expired_percentage"`
+}
+
+type ExpiryPercentageBucket struct {
+	RangeStart int `json:"range_start"`
+	RangeEnd   int `json:"range_end"`
+	Count      int `json:"count"`
+}
+
+// Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
+type ActiveContractsExpiredStorageAnalysis struct {
+	ThresholdAnalysis    []ExpiredStorageThreshold `json:"threshold_analysis"`
+	TotalActiveContracts int                       `json:"total_active_contracts"`
+}
+
+type ExpiredStorageThreshold struct {
+	ThresholdRange     string  `json:"threshold_range"`
+	ContractCount      int     `json:"contract_count"`
+	PercentageOfActive float64 `json:"percentage_of_active"`
+}
+
+// Question 9: How many contracts are fully expired at both account and storage levels?
+type CompleteExpiryAnalysis struct {
+	FullyExpiredContractCount int     `json:"fully_expired_contract_count"`
+	TotalContractsWithStorage int     `json:"total_contracts_with_storage"`
+	FullyExpiredPercentage    float64 `json:"fully_expired_percentage"`
 }
 
 type StateRepository struct {
@@ -416,7 +508,7 @@ func (r *StateRepository) GetSyncStatus(ctx context.Context, latestRange uint64,
 	if lastIndexedRange == 0 {
 		endBlock = 0 // Genesis range
 	} else {
-		endBlock = lastIndexedRange*rangeSize
+		endBlock = lastIndexedRange * rangeSize
 	}
 
 	isSynced := lastIndexedRange >= latestRange
@@ -426,4 +518,454 @@ func (r *StateRepository) GetSyncStatus(ctx context.Context, latestRange uint64,
 		LastIndexedRange: lastIndexedRange,
 		EndBlock:         endBlock,
 	}, nil
+}
+
+// GetAnalyticsData returns comprehensive analytics for all questions with optimized single-query approach
+// This method executes a single comprehensive base query and derives all analytics for maximum efficiency
+func (r *StateRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error) {
+	analytics := &AnalyticsData{}
+
+	// Get base statistics with a single optimized query
+	baseStats, err := r.getBaseStatistics(ctx, expiryBlock)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get base statistics: %w", err)
+	}
+
+	// Derive all analytics from base statistics (much more efficient)
+	analytics.AccountExpiry = r.deriveAccountExpiryAnalysis(baseStats)
+	analytics.AccountDistribution = r.deriveAccountDistributionAnalysis(baseStats)
+	analytics.StorageSlotExpiry = r.deriveStorageSlotExpiryAnalysis(baseStats)
+
+	// Get contract storage analysis (still needs separate query for top 10)
+	if err := r.getContractStorageAnalysis(ctx, expiryBlock, &analytics.ContractStorage); err != nil {
+		return nil, fmt.Errorf("failed to get contract storage analysis: %w", err)
+	}
+
+	// Get storage expiry analysis and fully expired contracts (combined for efficiency)
+	if err := r.getStorageExpiryAnalysis(ctx, expiryBlock, &analytics.StorageExpiry, &analytics.FullyExpiredContracts); err != nil {
+		return nil, fmt.Errorf("failed to get storage expiry analysis: %w", err)
+	}
+
+	// Get active contracts with expired storage analysis
+	if err := r.getActiveContractsExpiredStorageAnalysis(ctx, expiryBlock, &analytics.ActiveContractsExpiredStorage); err != nil {
+		return nil, fmt.Errorf("failed to get active contracts expired storage analysis: %w", err)
+	}
+
+	// Get complete expiry analysis
+	if err := r.getCompleteExpiryAnalysis(ctx, expiryBlock, &analytics.CompleteExpiry); err != nil {
+		return nil, fmt.Errorf("failed to get complete expiry analysis: %w", err)
+	}
+
+	return analytics, nil
+}
+
+// BaseStatistics holds all basic counts that can be derived from a single query
+type BaseStatistics struct {
+	// Account statistics (derived totals calculated via methods)
+	TotalEOAs        int
+	TotalContracts   int
+	ExpiredEOAs      int
+	ExpiredContracts int
+
+	// Storage statistics
+	TotalSlots   int
+	ExpiredSlots int
+}
+
+// TotalAccounts returns the total count of all accounts (derived)
+func (bs *BaseStatistics) TotalAccounts() int {
+	return bs.TotalEOAs + bs.TotalContracts
+}
+
+// ExpiredAccounts returns the total count of expired accounts (derived)
+func (bs *BaseStatistics) ExpiredAccounts() int {
+	return bs.ExpiredEOAs + bs.ExpiredContracts
+}
+
+// getBaseStatistics retrieves all basic statistics in a single optimized query
+func (r *StateRepository) getBaseStatistics(ctx context.Context, expiryBlock uint64) (*BaseStatistics, error) {
+	query := `
+		WITH account_stats AS (
+			SELECT 
+				COUNT(*) FILTER (WHERE is_contract = false) as total_eoas,
+				COUNT(*) FILTER (WHERE is_contract = true) as total_contracts,
+				COUNT(*) FILTER (WHERE last_access_block < $1 AND is_contract = false) as expired_eoas,
+				COUNT(*) FILTER (WHERE last_access_block < $1 AND is_contract = true) as expired_contracts
+			FROM accounts_current
+		),
+		storage_stats AS (
+			SELECT 
+				COUNT(*) as total_slots,
+				COUNT(*) FILTER (WHERE last_access_block < $1) as expired_slots
+			FROM storage_current
+		)
+		SELECT 
+			a.total_eoas,
+			a.total_contracts,
+			a.expired_eoas,
+			a.expired_contracts,
+			s.total_slots,
+			s.expired_slots
+		FROM account_stats a, storage_stats s
+	`
+
+	var stats BaseStatistics
+	err := r.db.QueryRow(ctx, query, expiryBlock).Scan(
+		&stats.TotalEOAs,
+		&stats.TotalContracts,
+		&stats.ExpiredEOAs,
+		&stats.ExpiredContracts,
+		&stats.TotalSlots,
+		&stats.ExpiredSlots,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("could not get base statistics: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// deriveAccountExpiryAnalysis derives account expiry analysis from base statistics
+func (r *StateRepository) deriveAccountExpiryAnalysis(stats *BaseStatistics) AccountExpiryAnalysis {
+	result := AccountExpiryAnalysis{
+		ExpiredEOAs:          stats.ExpiredEOAs,
+		ExpiredContracts:     stats.ExpiredContracts,
+		TotalExpiredAccounts: stats.ExpiredAccounts(),
+		TotalEOAs:            stats.TotalEOAs,
+		TotalContracts:       stats.TotalContracts,
+		TotalAccounts:        stats.TotalAccounts(),
+	}
+
+	// Calculate percentages
+	if stats.TotalEOAs > 0 {
+		result.ExpiredEOAPercentage = float64(stats.ExpiredEOAs) / float64(stats.TotalEOAs) * 100
+	}
+	if stats.TotalContracts > 0 {
+		result.ExpiredContractPercentage = float64(stats.ExpiredContracts) / float64(stats.TotalContracts) * 100
+	}
+	if stats.TotalAccounts() > 0 {
+		result.TotalExpiredPercentage = float64(stats.ExpiredAccounts()) / float64(stats.TotalAccounts()) * 100
+	}
+
+	return result
+}
+
+// deriveAccountDistributionAnalysis derives account distribution analysis from base statistics
+func (r *StateRepository) deriveAccountDistributionAnalysis(stats *BaseStatistics) AccountDistributionAnalysis {
+	result := AccountDistributionAnalysis{
+		TotalExpiredAccounts: stats.ExpiredAccounts(),
+	}
+
+	// Calculate percentages among expired accounts
+	if stats.ExpiredAccounts() > 0 {
+		result.ContractPercentage = float64(stats.ExpiredContracts) / float64(stats.ExpiredAccounts()) * 100
+		result.EOAPercentage = float64(stats.ExpiredEOAs) / float64(stats.ExpiredAccounts()) * 100
+	}
+
+	return result
+}
+
+// deriveStorageSlotExpiryAnalysis derives storage slot expiry analysis from base statistics
+func (r *StateRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatistics) StorageSlotExpiryAnalysis {
+	result := StorageSlotExpiryAnalysis{
+		ExpiredSlots: stats.ExpiredSlots,
+		TotalSlots:   stats.TotalSlots,
+	}
+
+	// Calculate percentage of expired slots
+	if stats.TotalSlots > 0 {
+		result.ExpiredSlotPercentage = float64(stats.ExpiredSlots) / float64(stats.TotalSlots) * 100
+	}
+
+	return result
+}
+
+// Question 4: What are the top 10 contracts with the largest expired state footprint?
+func (r *StateRepository) getContractStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ContractStorageAnalysis) error {
+	query := `
+		WITH contract_storage_stats AS (
+			SELECT 
+				s.address,
+				COUNT(*) FILTER (WHERE s.last_access_block < $1) as expired_slots,
+				COUNT(*) as total_slots
+			FROM storage_current s
+			GROUP BY s.address
+			HAVING COUNT(*) FILTER (WHERE s.last_access_block < $1) > 0
+		)
+		SELECT 
+			address,
+			expired_slots,
+			total_slots,
+			(expired_slots::float / total_slots::float * 100) as expiry_percentage
+		FROM contract_storage_stats
+		ORDER BY expired_slots DESC, expiry_percentage DESC
+		LIMIT 10
+	`
+
+	rows, err := r.db.Query(ctx, query, expiryBlock)
+	if err != nil {
+		return fmt.Errorf("could not query contract storage analysis: %w", err)
+	}
+	defer rows.Close()
+
+	var contracts []ExpiredContract
+	for rows.Next() {
+		var contract ExpiredContract
+		var addressBytes []byte
+
+		err := rows.Scan(
+			&addressBytes,
+			&contract.ExpiredSlotCount,
+			&contract.TotalSlotCount,
+			&contract.ExpiryPercentage,
+		)
+		if err != nil {
+			return fmt.Errorf("could not scan contract storage row: %w", err)
+		}
+
+		contract.Address = utils.BytesToHex(addressBytes)
+		contracts = append(contracts, contract)
+	}
+
+	result.TopExpiredContracts = contracts
+	return rows.Err()
+}
+
+// Questions 5 & 6: Storage expiry analysis and fully expired contracts (Optimized)
+func (r *StateRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBlock uint64, storageResult *StorageExpiryAnalysis, fullyExpiredResult *FullyExpiredContractsAnalysis) error {
+	// Simplified query that avoids complex JSON aggregation
+	query := `
+		WITH contract_expiry_stats AS (
+			SELECT 
+				(COUNT(*) FILTER (WHERE s.last_access_block < $1)::float / COUNT(*)::float * 100) as expiry_percentage
+			FROM storage_current s
+			GROUP BY s.address
+		)
+		SELECT 
+			AVG(expiry_percentage) as avg_expiry_percentage,
+			PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY expiry_percentage) as median_expiry_percentage,
+			COUNT(*) as contracts_analyzed,
+			COUNT(*) FILTER (WHERE expiry_percentage = 100) as fully_expired_count
+		FROM contract_expiry_stats
+	`
+
+	var avgExpiry, medianExpiry float64
+	var contractsAnalyzed, fullyExpiredCount int
+
+	err := r.db.QueryRow(ctx, query, expiryBlock).Scan(
+		&avgExpiry,
+		&medianExpiry,
+		&contractsAnalyzed,
+		&fullyExpiredCount,
+	)
+	if err != nil {
+		return fmt.Errorf("could not get storage expiry analysis: %w", err)
+	}
+
+	storageResult.AverageExpiryPercentage = avgExpiry
+	storageResult.MedianExpiryPercentage = medianExpiry
+	storageResult.ContractsAnalyzed = contractsAnalyzed
+
+	// Get distribution buckets with a separate, simpler query
+	buckets, err := r.getExpiryDistributionBuckets(ctx, expiryBlock)
+	if err != nil {
+		return fmt.Errorf("could not get expiry distribution buckets: %w", err)
+	}
+	storageResult.ExpiryDistribution = buckets
+
+	fullyExpiredResult.FullyExpiredContractCount = fullyExpiredCount
+	fullyExpiredResult.TotalContractsWithStorage = contractsAnalyzed
+	if contractsAnalyzed > 0 {
+		fullyExpiredResult.FullyExpiredPercentage = float64(fullyExpiredCount) / float64(contractsAnalyzed) * 100
+	}
+
+	return nil
+}
+
+// getExpiryDistributionBuckets gets distribution buckets with a simpler query
+func (r *StateRepository) getExpiryDistributionBuckets(ctx context.Context, expiryBlock uint64) ([]ExpiryPercentageBucket, error) {
+	query := `
+		WITH contract_expiry_stats AS (
+			SELECT 
+				(COUNT(*) FILTER (WHERE s.last_access_block < $1)::float / COUNT(*)::float * 100) as expiry_percentage
+			FROM storage_current s
+			GROUP BY s.address
+		),
+		bucketed_stats AS (
+			SELECT 
+				CASE 
+					WHEN expiry_percentage = 0 THEN 0
+					WHEN expiry_percentage <= 10 THEN 10
+					WHEN expiry_percentage <= 20 THEN 20
+					WHEN expiry_percentage <= 30 THEN 30
+					WHEN expiry_percentage <= 40 THEN 40
+					WHEN expiry_percentage <= 50 THEN 50
+					WHEN expiry_percentage <= 60 THEN 60
+					WHEN expiry_percentage <= 70 THEN 70
+					WHEN expiry_percentage <= 80 THEN 80
+					WHEN expiry_percentage <= 90 THEN 90
+					ELSE 100
+				END as bucket
+			FROM contract_expiry_stats
+		)
+		SELECT 
+			bucket,
+			COUNT(*) as count
+		FROM bucketed_stats
+		GROUP BY bucket
+		ORDER BY bucket
+	`
+
+	rows, err := r.db.Query(ctx, query, expiryBlock)
+	if err != nil {
+		return nil, fmt.Errorf("could not query expiry distribution buckets: %w", err)
+	}
+	defer rows.Close()
+
+	var buckets []ExpiryPercentageBucket
+	for rows.Next() {
+		var bucket ExpiryPercentageBucket
+		var bucketEnd int
+
+		err := rows.Scan(&bucketEnd, &bucket.Count)
+		if err != nil {
+			return nil, fmt.Errorf("could not scan bucket row: %w", err)
+		}
+
+		// Calculate range start based on bucket end
+		if bucketEnd == 0 {
+			bucket.RangeStart = 0
+		} else {
+			bucket.RangeStart = bucketEnd - 9
+		}
+		bucket.RangeEnd = bucketEnd
+
+		buckets = append(buckets, bucket)
+	}
+
+	return buckets, rows.Err()
+}
+
+// Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
+func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
+	query := `
+		WITH contract_storage_analysis AS (
+			SELECT 
+				s.address,
+				a.last_access_block as account_last_access,
+				COUNT(s.slot_key) as total_slots,
+				COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1) as expired_slots,
+				(COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1)::float / COUNT(s.slot_key)::float * 100) as expiry_percentage
+			FROM storage_current s
+			INNER JOIN accounts_current a ON s.address = a.address
+			WHERE a.is_contract = true
+			GROUP BY s.address, a.last_access_block
+		),
+		threshold_analysis AS (
+			SELECT 
+				CASE 
+					WHEN expiry_percentage = 0 THEN '0%'
+					WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN '1-20%'
+					WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN '21-50%'
+					WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN '51-80%'
+					WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN '81-99%'
+					ELSE '100%'
+				END as threshold_range,
+				COUNT(*) FILTER (WHERE account_last_access >= $1) as active_contract_count
+			FROM contract_storage_analysis
+			GROUP BY threshold_range
+		),
+		total_active AS (
+			SELECT COUNT(*) as total_active_contracts
+			FROM contract_storage_analysis
+			WHERE account_last_access >= $1
+		)
+		SELECT 
+			json_agg(
+				json_build_object(
+					'threshold_range', ta.threshold_range,
+					'contract_count', ta.active_contract_count,
+					'percentage_of_active', CASE WHEN tac.total_active_contracts > 0 
+						THEN (ta.active_contract_count::float / tac.total_active_contracts::float * 100) 
+						ELSE 0 END
+				) ORDER BY 
+					CASE ta.threshold_range
+						WHEN '0%' THEN 1
+						WHEN '1-20%' THEN 2
+						WHEN '21-50%' THEN 3
+						WHEN '51-80%' THEN 4
+						WHEN '81-99%' THEN 5
+						WHEN '100%' THEN 6
+					END
+			) as threshold_analysis,
+			tac.total_active_contracts
+		FROM threshold_analysis ta
+		CROSS JOIN total_active tac
+		GROUP BY tac.total_active_contracts
+	`
+
+	var thresholdAnalysisJSON string
+	var totalActiveContracts int
+
+	err := r.db.QueryRow(ctx, query, expiryBlock).Scan(
+		&thresholdAnalysisJSON,
+		&totalActiveContracts,
+	)
+	if err != nil {
+		return fmt.Errorf("could not get active contracts expired storage analysis: %w", err)
+	}
+
+	// Parse threshold analysis JSON
+	var thresholdAnalysis []ExpiredStorageThreshold
+	if thresholdAnalysisJSON != "" && thresholdAnalysisJSON != "null" {
+		if err := json.Unmarshal([]byte(thresholdAnalysisJSON), &thresholdAnalysis); err != nil {
+			// If JSON parsing fails, create empty analysis
+			thresholdAnalysis = []ExpiredStorageThreshold{}
+		}
+	}
+
+	result.ThresholdAnalysis = thresholdAnalysis
+	result.TotalActiveContracts = totalActiveContracts
+	return nil
+}
+
+// Question 9: How many contracts are fully expired at both account and storage levels?
+func (r *StateRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
+	query := `
+		WITH fully_expired_storage_contracts AS (
+			SELECT DISTINCT s.address
+			FROM storage_current s
+			GROUP BY s.address
+			HAVING COUNT(*) > 0 AND COUNT(*) FILTER (WHERE s.last_access_block >= $1) = 0
+		),
+		fully_expired_contracts AS (
+			SELECT fesc.address
+			FROM fully_expired_storage_contracts fesc
+			INNER JOIN accounts_current a ON fesc.address = a.address
+			WHERE a.last_access_block < $1 AND a.is_contract = true
+		)
+		SELECT 
+			COUNT(fec.address) as fully_expired_contract_count,
+			(SELECT COUNT(DISTINCT s.address) FROM storage_current s) as total_contracts_with_storage
+		FROM fully_expired_contracts fec
+		RIGHT JOIN (SELECT 1) dummy ON true
+	`
+
+	var fullyExpiredCount, totalContracts int
+
+	err := r.db.QueryRow(ctx, query, expiryBlock).Scan(
+		&fullyExpiredCount,
+		&totalContracts,
+	)
+	if err != nil {
+		return fmt.Errorf("could not get complete expiry analysis: %w", err)
+	}
+
+	result.FullyExpiredContractCount = fullyExpiredCount
+	result.TotalContractsWithStorage = totalContracts
+	if totalContracts > 0 {
+		result.FullyExpiredPercentage = float64(fullyExpiredCount) / float64(totalContracts) * 100
+	}
+
+	return nil
 }

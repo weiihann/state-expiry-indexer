@@ -43,6 +43,7 @@ func (s *Server) Run(ctx context.Context, host string, port int) error {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/stats/expired-count", s.handleGetExpiredStateCount)
 		r.Get("/stats/top-expired-contracts", s.handleGetTopNExpiredContracts)
+		r.Get("/stats/analytics", s.handleGetAnalytics)
 		r.Get("/lookup", s.handleStateLookup)
 		r.Get("/account-type", s.handleGetAccountType)
 		r.Get("/accounts", s.handleGetAccounts)
@@ -341,7 +342,7 @@ func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	latestBlock := latestBlockBig.Uint64()
-	
+
 	// Calculate the latest range number
 	// Range calculation: for block 0 (genesis) = range 0, for others = (blockNumber - 1) / rangeSize
 	var latestRange uint64
@@ -370,4 +371,46 @@ func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
 		"end_block", syncStatus.EndBlock,
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, syncStatus)
+}
+
+func (s *Server) handleGetAnalytics(w http.ResponseWriter, r *http.Request) {
+	expiryBlock, err := getUint64QueryParam(r, "expiry_block")
+	if err != nil {
+		s.log.Warn("Invalid expiry_block parameter", "error", err, "remote_addr", r.RemoteAddr)
+		respondWithError(w, http.StatusBadRequest, "Invalid 'expiry_block' query parameter")
+		return
+	}
+
+	// Get the latest block number from the RPC client
+	latestBlockBig, err := s.rpcClient.GetLatestBlockNumber(r.Context())
+	if err != nil {
+		s.log.Error("Failed to get latest block number from RPC",
+			"error", err,
+			"remote_addr", r.RemoteAddr)
+		respondWithError(w, http.StatusInternalServerError, "Could not get latest block number")
+		return
+	}
+
+	currentBlock := latestBlockBig.Uint64()
+
+	analytics, err := s.repo.GetAnalyticsData(r.Context(), expiryBlock, currentBlock)
+	if err != nil {
+		s.log.Error("Failed to get analytics data",
+			"error", err,
+			"expiry_block", expiryBlock,
+			"current_block", currentBlock,
+			"remote_addr", r.RemoteAddr)
+		respondWithError(w, http.StatusInternalServerError, "Could not get analytics data")
+		return
+	}
+
+	s.log.Debug("Served analytics data",
+		"expiry_block", expiryBlock,
+		"current_block", currentBlock,
+		"expired_accounts", analytics.AccountExpiry.TotalExpiredAccounts,
+		"total_accounts", analytics.AccountExpiry.TotalAccounts,
+		"expired_slots", analytics.StorageSlotExpiry.ExpiredSlots,
+		"total_slots", analytics.StorageSlotExpiry.TotalSlots,
+		"remote_addr", r.RemoteAddr)
+	respondWithJSON(w, http.StatusOK, analytics)
 }
