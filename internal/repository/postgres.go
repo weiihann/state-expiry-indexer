@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -848,7 +847,8 @@ func (r *StateRepository) getExpiryDistributionBuckets(ctx context.Context, expi
 
 // Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
 func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
-	query := `
+	// Memory-efficient approach: Get threshold analysis with row-based results instead of json_agg
+	thresholdQuery := `
 		WITH contract_storage_analysis AS (
 			SELECT 
 				s.address,
@@ -874,54 +874,74 @@ func (r *StateRepository) getActiveContractsExpiredStorageAnalysis(ctx context.C
 				COUNT(*) FILTER (WHERE account_last_access >= $1) as active_contract_count
 			FROM contract_storage_analysis
 			GROUP BY threshold_range
-		),
-		total_active AS (
-			SELECT COUNT(*) as total_active_contracts
-			FROM contract_storage_analysis
-			WHERE account_last_access >= $1
 		)
 		SELECT 
-			json_agg(
-				json_build_object(
-					'threshold_range', ta.threshold_range,
-					'contract_count', ta.active_contract_count,
-					'percentage_of_active', CASE WHEN tac.total_active_contracts > 0 
-						THEN (ta.active_contract_count::float / tac.total_active_contracts::float * 100) 
-						ELSE 0 END
-				) ORDER BY 
-					CASE ta.threshold_range
-						WHEN '0%' THEN 1
-						WHEN '1-20%' THEN 2
-						WHEN '21-50%' THEN 3
-						WHEN '51-80%' THEN 4
-						WHEN '81-99%' THEN 5
-						WHEN '100%' THEN 6
-					END
-			) as threshold_analysis,
-			tac.total_active_contracts
-		FROM threshold_analysis ta
-		CROSS JOIN total_active tac
-		GROUP BY tac.total_active_contracts
+			threshold_range,
+			active_contract_count
+		FROM threshold_analysis
+		ORDER BY 
+			CASE threshold_range
+				WHEN '0%' THEN 1
+				WHEN '1-20%' THEN 2
+				WHEN '21-50%' THEN 3
+				WHEN '51-80%' THEN 4
+				WHEN '81-99%' THEN 5
+				WHEN '100%' THEN 6
+			END
 	`
 
-	var thresholdAnalysisJSON string
-	var totalActiveContracts int
+	// Get total active contracts count first
+	totalActiveQuery := `
+		WITH contract_storage_analysis AS (
+			SELECT 
+				s.address,
+				a.last_access_block as account_last_access
+			FROM storage_current s
+			INNER JOIN accounts_current a ON s.address = a.address
+			WHERE a.is_contract = true
+			GROUP BY s.address, a.last_access_block
+		)
+		SELECT COUNT(*) as total_active_contracts
+		FROM contract_storage_analysis
+		WHERE account_last_access >= $1
+	`
 
-	err := r.db.QueryRow(ctx, query, expiryBlock).Scan(
-		&thresholdAnalysisJSON,
-		&totalActiveContracts,
-	)
+	var totalActiveContracts int
+	err := r.db.QueryRow(ctx, totalActiveQuery, expiryBlock).Scan(&totalActiveContracts)
 	if err != nil {
-		return fmt.Errorf("could not get active contracts expired storage analysis: %w", err)
+		return fmt.Errorf("could not get total active contracts: %w", err)
 	}
 
-	// Parse threshold analysis JSON
+	// Get threshold analysis rows (memory efficient)
+	rows, err := r.db.Query(ctx, thresholdQuery, expiryBlock)
+	if err != nil {
+		return fmt.Errorf("could not query threshold analysis: %w", err)
+	}
+	defer rows.Close()
+
 	var thresholdAnalysis []ExpiredStorageThreshold
-	if thresholdAnalysisJSON != "" && thresholdAnalysisJSON != "null" {
-		if err := json.Unmarshal([]byte(thresholdAnalysisJSON), &thresholdAnalysis); err != nil {
-			// If JSON parsing fails, create empty analysis
-			thresholdAnalysis = []ExpiredStorageThreshold{}
+	for rows.Next() {
+		var threshold ExpiredStorageThreshold
+		var contractCount int
+
+		err := rows.Scan(&threshold.ThresholdRange, &contractCount)
+		if err != nil {
+			return fmt.Errorf("could not scan threshold row: %w", err)
 		}
+
+		threshold.ContractCount = contractCount
+		// Calculate percentage of active contracts
+		if totalActiveContracts > 0 {
+			threshold.PercentageOfActive = float64(contractCount) / float64(totalActiveContracts) * 100
+		} else {
+			threshold.PercentageOfActive = 0
+		}
+
+		thresholdAnalysis = append(thresholdAnalysis, threshold)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating threshold rows: %w", err)
 	}
 
 	result.ThresholdAnalysis = thresholdAnalysis

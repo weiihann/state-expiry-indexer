@@ -146,18 +146,6 @@ func getUint64QueryParam(r *http.Request, key string) (uint64, error) {
 	return strconv.ParseUint(valStr, 10, 64)
 }
 
-func getIntQueryParam(r *http.Request, key string, defaultValue int) (int, error) {
-	valStr := r.URL.Query().Get(key)
-	if valStr == "" {
-		return defaultValue, nil
-	}
-	val, err := strconv.Atoi(valStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid integer parameter: %s", key)
-	}
-	return val, nil
-}
-
 func respondWithError(w http.ResponseWriter, code int, message string) {
 	respondWithJSON(w, code, map[string]string{"error": message})
 }
