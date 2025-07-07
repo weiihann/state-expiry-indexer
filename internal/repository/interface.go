@@ -29,8 +29,8 @@ type StateRepositoryInterface interface {
 // NewRepository creates the appropriate repository implementation based on configuration
 func NewRepository(ctx context.Context, config internal.Config) (StateRepositoryInterface, error) {
 	if config.ArchiveMode {
-		// ClickHouse archive mode
-		db, err := database.ConnectClickHouse(ctx, config)
+		// ClickHouse archive mode - use SQL interface for repository compatibility
+		db, err := database.ConnectClickHouseSQL(config)
 		if err != nil {
 			return nil, err
 		}
