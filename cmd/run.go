@@ -8,11 +8,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/spf13/cobra"
 	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/api"
-	"github.com/weiihann/state-expiry-indexer/internal/database"
 	"github.com/weiihann/state-expiry-indexer/internal/indexer"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
@@ -81,27 +79,22 @@ func run(cmd *cobra.Command, args []string) {
 
 	ctx := context.Background()
 
-	var db *pgxpool.Pool
-	var repo *repository.StateRepository
-
-	// Initialize database connection based on archive mode
-	if config.ArchiveMode {
-		log.Info("Initializing ClickHouse connection for archive mode...")
-		// TODO: Implement ClickHouse repository when available
-		log.Error("ClickHouse archive mode not yet implemented")
+	// Initialize repository based on archive mode using factory
+	log.Info("Initializing repository...", "archive_mode", config.ArchiveMode)
+	repo, err := repository.NewRepository(ctx, config)
+	if err != nil {
+		log.Error("Failed to initialize repository", "error", err, "archive_mode", config.ArchiveMode)
 		os.Exit(1)
-	} else {
-		log.Info("Initializing PostgreSQL database connection...")
-		db, err = database.Connect(ctx, config)
-		if err != nil {
-			log.Error("Failed to connect to database", "error", err)
-			os.Exit(1)
-		}
-		defer db.Close()
-
-		// Initialize repository
-		repo = repository.NewStateRepository(db)
 	}
+
+	log.Info("Repository initialized successfully",
+		"archive_mode", config.ArchiveMode,
+		"database_type", func() string {
+			if config.ArchiveMode {
+				return "ClickHouse"
+			}
+			return "PostgreSQL"
+		}())
 
 	// Initialize RPC clients
 	var clients []*rpc.Client

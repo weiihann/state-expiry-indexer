@@ -1000,6 +1000,76 @@ CLICKHOUSE_DATABASE=state_expiry
 - Placeholder ClickHouse connection functions are ready for driver integration
 - Configuration logging shows archive mode status for operational visibility
 
+**Task 26 Execution Completed Successfully:**
+
+I have successfully completed Task 26: Repository Interface and ClickHouse Implementation as the Executor. Here are the key accomplishments:
+
+**✅ Deliverables Completed:**
+1. **StateRepositoryInterface**: Created clean interface abstraction for all database operations in `internal/repository/interface.go`
+2. **PostgreSQL Repository Refactoring**: Updated existing `StateRepository` to `PostgreSQLRepository` with backward compatibility
+3. **ClickHouse Repository Implementation**: Created complete `ClickHouseRepository` with placeholder methods in `internal/repository/clickhouse.go`
+4. **Repository Factory Pattern**: Implemented `NewRepository()` factory function for flag-based selection
+5. **Code Integration**: Updated API server and indexer to use interface instead of concrete types
+6. **Interface Compliance**: Added compile-time interface compliance checks for both implementations
+
+**✅ Success Criteria Met:**
+- ✅ Clean interface abstraction for database operations with all required methods
+- ✅ ClickHouse repository implementing all required methods (placeholder implementation)
+- ✅ Repository factory pattern based on archive flag with automatic database selection
+- ✅ All existing functionality preserved through backward compatibility
+
+**✅ Technical Implementation:**
+- **Interface Design**: Created `StateRepositoryInterface` with 10 essential methods covering all indexer and API needs
+- **PostgreSQL Repository**: Renamed to `PostgreSQLRepository` with type alias for backward compatibility
+- **ClickHouse Repository**: Complete placeholder implementation with structured error messages and logging
+- **Factory Function**: `NewRepository(ctx, config)` automatically selects implementation based on `config.ArchiveMode`
+- **Code Integration**: Updated `cmd/run.go`, `internal/api/server.go`, and `internal/indexer/indexer.go` to use interface
+- **Compliance Validation**: Added `var _ StateRepositoryInterface = (*PostgreSQLRepository)(nil)` and similar for ClickHouse
+
+**✅ Repository Interface Methods:**
+```go
+// Range-based processing methods (used by indexer)
+GetLastIndexedRange(ctx context.Context) (uint64, error)
+UpdateRangeDataInTx(ctx context.Context, accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64, rangeNumber uint64) error
+
+// API query methods (used by API server)
+GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error)
+GetAccountInfo(ctx context.Context, address string) (*Account, error)
+GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
+GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error)
+
+// Additional query methods (for completeness)
+GetExpiredStateCount(ctx context.Context, expiryBlock uint64) (int, error)
+GetTopNExpiredContracts(ctx context.Context, expiryBlock uint64, n int) ([]Contract, error)
+GetAccountType(ctx context.Context, address string) (*bool, error)
+GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error)
+```
+
+**✅ Factory Pattern Usage:**
+```go
+// Automatic repository selection based on configuration
+repo, err := repository.NewRepository(ctx, config)
+if err != nil {
+    log.Error("Failed to initialize repository", "error", err, "archive_mode", config.ArchiveMode)
+    os.Exit(1)
+}
+```
+
+**✅ Backward Compatibility:**
+- `StateRepository` type alias preserves existing code compatibility
+- `NewStateRepository()` function continues to work for PostgreSQL mode
+- All existing method signatures unchanged
+- No breaking changes to consuming code
+
+**Ready for Task 27:** The repository abstraction is complete and ready. Task 27 (ClickHouse Migration System Integration) can now proceed to extend the migration system to handle ClickHouse schema migrations.
+
+**Implementation Architecture:**
+- **Clean Separation**: PostgreSQL and ClickHouse implementations are completely separate
+- **Interface Compliance**: Both implementations implement the same interface ensuring consistency
+- **Factory Selection**: Single configuration flag determines which database system to use
+- **Extensibility**: Interface design allows for easy addition of other database implementations
+- **Error Handling**: ClickHouse placeholder implementation provides clear error messages for unimplemented features
+
 # State Expiry Indexer: Hybrid Block Processing
 
 ## Background and Motivation
@@ -1238,8 +1308,8 @@ type ClickHouseRepository struct { ... }
 **Archive Implementation Tasks:**
 - [x] **Task 24**: ClickHouse Schema Design and Migration System ✅ **COMPLETED**
 - [x] **Task 25**: Archive Flag Configuration Management ✅ **COMPLETED**
-- [ ] **Task 26**: Repository Interface and ClickHouse Implementation ⏳ **READY TO START**
-- [ ] **Task 27**: ClickHouse Migration System Integration ⏳ **PENDING**
+- [x] **Task 26**: Repository Interface and ClickHouse Implementation ✅ **COMPLETED**
+- [ ] **Task 27**: ClickHouse Migration System Integration ⏳ **READY TO START**
 - [ ] **Task 28**: Archive Mode Indexer Integration ⏳ **PENDING**
 - [ ] **Task 29**: Archive Analytics API Adaptation ⏳ **PENDING**
 - [ ] **Task 30**: Archive System Testing and Documentation ⏳ **PENDING**

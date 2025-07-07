@@ -17,14 +17,14 @@ import (
 )
 
 type Server struct {
-	repo      *repository.StateRepository
+	repo      repository.StateRepositoryInterface
 	rpcClient *rpc.Client
 	rangeSize uint64
 	log       *slog.Logger
 	server    *http.Server
 }
 
-func NewServer(repo *repository.StateRepository, rpcClient *rpc.Client, rangeSize uint64) *Server {
+func NewServer(repo repository.StateRepositoryInterface, rpcClient *rpc.Client, rangeSize uint64) *Server {
 	return &Server{
 		repo:      repo,
 		rpcClient: rpcClient,

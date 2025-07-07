@@ -19,7 +19,7 @@ const (
 )
 
 type Indexer struct {
-	repo           *repository.StateRepository
+	repo           repository.StateRepositoryInterface
 	rangeProcessor *storage.RangeProcessor
 	config         internal.Config
 	log            *slog.Logger
@@ -27,13 +27,13 @@ type Indexer struct {
 
 type Service struct {
 	indexer   *Indexer
-	repo      *repository.StateRepository
+	repo      repository.StateRepositoryInterface
 	rpcClient *rpc.Client
 	config    internal.Config
 	log       *slog.Logger
 }
 
-func NewIndexer(repo *repository.StateRepository, rangeProcessor *storage.RangeProcessor, config internal.Config) *Indexer {
+func NewIndexer(repo repository.StateRepositoryInterface, rangeProcessor *storage.RangeProcessor, config internal.Config) *Indexer {
 	return &Indexer{
 		repo:           repo,
 		rangeProcessor: rangeProcessor,
@@ -42,7 +42,7 @@ func NewIndexer(repo *repository.StateRepository, rangeProcessor *storage.RangeP
 	}
 }
 
-func NewService(repo *repository.StateRepository, rpcClient *rpc.Client, config internal.Config) *Service {
+func NewService(repo repository.StateRepositoryInterface, rpcClient *rpc.Client, config internal.Config) *Service {
 	log := logger.GetLogger("indexer-service")
 
 	// Initialize range processor
