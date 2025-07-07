@@ -398,3 +398,32 @@ func (r *StateRepository) GetExpiredAccountsByType(ctx context.Context, expiryBl
 
 	return accounts, nil
 }
+
+type SyncStatus struct {
+	IsSynced         bool   `json:"is_synced"`
+	LastIndexedRange uint64 `json:"last_indexed_range"`
+	EndBlock         uint64 `json:"end_block"`
+}
+
+func (r *StateRepository) GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error) {
+	lastIndexedRange, err := r.GetLastIndexedRange(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not get last indexed range: %w", err)
+	}
+
+	// Calculate the end block of the last indexed range
+	var endBlock uint64
+	if lastIndexedRange == 0 {
+		endBlock = 0 // Genesis range
+	} else {
+		endBlock = lastIndexedRange*rangeSize
+	}
+
+	isSynced := lastIndexedRange >= latestRange
+
+	return &SyncStatus{
+		IsSynced:         isSynced,
+		LastIndexedRange: lastIndexedRange,
+		EndBlock:         endBlock,
+	}, nil
+}
