@@ -68,3 +68,28 @@ func ConnectSQL(config internal.Config) (*sql.DB, error) {
 
 	return db, nil
 }
+
+// ConnectClickHouse creates a ClickHouse connection for archive mode
+func ConnectClickHouse(ctx context.Context, config internal.Config) (*sql.DB, error) {
+	log := logger.GetLogger("clickhouse-database")
+	connStr := config.GetClickHouseConnectionString()
+
+	// TODO: Add ClickHouse driver dependency and implement connection
+	// For now, return error indicating ClickHouse support is not yet implemented
+	log.Error("ClickHouse support not yet implemented",
+		"connection_string", connStr,
+		"host", config.ClickHouseHost,
+		"port", config.ClickHousePort,
+		"database", config.ClickHouseDatabase)
+
+	return nil, fmt.Errorf("ClickHouse support not yet implemented - please add ClickHouse driver dependency")
+}
+
+// ConnectClickHouseSQL creates a standard database/sql ClickHouse connection for golang-migrate
+func ConnectClickHouseSQL(config internal.Config) (*sql.DB, error) {
+	connStr := config.GetClickHouseConnectionString()
+
+	// TODO: Add ClickHouse driver dependency and implement connection
+	// For now, return error indicating ClickHouse support is not yet implemented
+	return nil, fmt.Errorf("ClickHouse migration support not yet implemented - connection string: %s", connStr)
+}

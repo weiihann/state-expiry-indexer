@@ -20,14 +20,17 @@ import (
 	"github.com/weiihann/state-expiry-indexer/pkg/storage"
 )
 
+var archiveMode bool
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run the state expiry indexer with separated RPC caller and processor workflows",
-	Long:  `This command starts the separated RPC caller, indexer processor, and API server concurrently. The RPC caller downloads state diffs, the processor indexes them into the database, and the API server serves queries. Use --download-only to run only the downloader component.`,
+	Long:  `This command starts the separated RPC caller, indexer processor, and API server concurrently. The RPC caller downloads state diffs, the processor indexes them into the database, and the API server serves queries. Use --archive to enable ClickHouse archive mode with complete state history.`,
 	Run:   run,
 }
 
 func init() {
+	runCmd.Flags().BoolVar(&archiveMode, "archive", false, "Enable archive mode with ClickHouse for complete state access history")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -41,15 +44,32 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Override archive mode if flag is provided
+	if archiveMode {
+		config.ArchiveMode = true
+		log.Info("Archive mode enabled via --archive flag - using ClickHouse for complete state history")
+	}
+
 	log.Info("Configuration loaded successfully",
 		"environment", config.Environment,
+		"archive_mode", config.ArchiveMode,
 		"api_port", config.APIPort,
 		"api_host", config.APIHost,
 		"data_dir", config.DataDir,
 		"block_batch_size", config.BlockBatchSize,
 		"poll_interval", config.PollInterval,
-		"db_max_conns", config.DBMaxConns,
-		"db_min_conns", config.DBMinConns,
+		"db_max_conns", func() int {
+			if config.ArchiveMode {
+				return config.ClickHouseMaxConns
+			}
+			return config.DBMaxConns
+		}(),
+		"db_min_conns", func() int {
+			if config.ArchiveMode {
+				return config.ClickHouseMinConns
+			}
+			return config.DBMinConns
+		}(),
 	)
 
 	// Run database migrations
@@ -64,17 +84,24 @@ func run(cmd *cobra.Command, args []string) {
 	var db *pgxpool.Pool
 	var repo *repository.StateRepository
 
-	// Initialize database connection pool
-	log.Info("Initializing database connection...")
-	db, err = database.Connect(ctx, config)
-	if err != nil {
-		log.Error("Failed to connect to database", "error", err)
+	// Initialize database connection based on archive mode
+	if config.ArchiveMode {
+		log.Info("Initializing ClickHouse connection for archive mode...")
+		// TODO: Implement ClickHouse repository when available
+		log.Error("ClickHouse archive mode not yet implemented")
 		os.Exit(1)
-	}
-	defer db.Close()
+	} else {
+		log.Info("Initializing PostgreSQL database connection...")
+		db, err = database.Connect(ctx, config)
+		if err != nil {
+			log.Error("Failed to connect to database", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
 
-	// Initialize repository
-	repo = repository.NewStateRepository(db)
+		// Initialize repository
+		repo = repository.NewStateRepository(db)
+	}
 
 	// Initialize RPC clients
 	var clients []*rpc.Client
