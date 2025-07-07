@@ -7,7 +7,7 @@ import (
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/clickhouse"
+	"github.com/golang-migrate/migrate/v4/database/clickhouse"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
@@ -408,11 +408,20 @@ func setupClickHouseMigrate() *migrate.Migrate {
 
 	// Get ClickHouse connection string
 	connectionString := config.GetClickHouseConnectionString()
+	p := &clickhouse.ClickHouse{}
+	d, err := p.Open(connectionString)
+	if err != nil {
+		log.Error("Could not open ClickHouse connection", "error", err, "connection_string", connectionString)
+		os.Exit(1)
+	}
+	defer d.Close()
 
 	// Create migrate instance with ClickHouse
-	m, err := migrate.New(
+	m, err := migrate.NewWithDatabaseInstance(
 		"file://db/ch-migrations",
-		connectionString)
+		config.ClickHouseDatabase,
+		d,
+	)
 	if err != nil {
 		log.Error("Could not create ClickHouse migrate instance", "error", err, "connection_string", connectionString)
 		os.Exit(1)
