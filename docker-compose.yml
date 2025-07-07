@@ -51,7 +51,7 @@ services:
       - "127.0.0.1:9010:9000"  # Native TCP interface (for migrations)
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse-config:/etc/clickhouse-server/config.d
+      - ./clickhouse-config:/etc/clickhouse-server/config.d:Z
     ulimits:
       nofile:
         soft: 262144
