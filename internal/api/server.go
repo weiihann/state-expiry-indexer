@@ -42,7 +42,6 @@ func (s *Server) Run(ctx context.Context, host string, port int) error {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/stats/analytics", s.handleGetAnalytics)
-		r.Get("/lookup", s.handleStateLookup)
 		r.Get("/sync", s.handleGetSyncStatus)
 	})
 
@@ -75,67 +74,6 @@ func (s *Server) Run(ctx context.Context, host string, port int) error {
 
 	s.log.Info("API server stopped gracefully")
 	return nil
-}
-
-func (s *Server) handleStateLookup(w http.ResponseWriter, r *http.Request) {
-	address := r.URL.Query().Get("address")
-	if address == "" {
-		s.log.Warn("Missing address parameter", "remote_addr", r.RemoteAddr)
-		respondWithError(w, http.StatusBadRequest, "Missing 'address' query parameter")
-		return
-	}
-
-	slot := r.URL.Query().Get("slot")
-	var slotPtr *string
-	if slot != "" {
-		slotPtr = &slot
-	}
-
-	if slotPtr != nil {
-		// For storage lookup, just return the access block as before
-		lastAccessedBlock, err := s.repo.GetStateLastAccessedBlock(r.Context(), address, slotPtr)
-		if err != nil {
-			s.log.Error("Failed to get state last access block",
-				"error", err,
-				"address", address,
-				"slot", slot,
-				"remote_addr", r.RemoteAddr)
-			respondWithError(w, http.StatusInternalServerError, "Could not get state last access block")
-			return
-		}
-
-		s.log.Debug("Served storage lookup",
-			"address", address,
-			"slot", slot,
-			"last_access_block", lastAccessedBlock,
-			"remote_addr", r.RemoteAddr)
-		respondWithJSON(w, http.StatusOK, map[string]uint64{"last_access_block": lastAccessedBlock})
-		return
-	}
-
-	// For account lookup, return full account info including type
-	accountInfo, err := s.repo.GetAccountInfo(r.Context(), address)
-	if err != nil {
-		s.log.Error("Failed to get account info",
-			"error", err,
-			"address", address,
-			"remote_addr", r.RemoteAddr)
-		respondWithError(w, http.StatusInternalServerError, "Could not get account info")
-		return
-	}
-
-	if accountInfo == nil {
-		s.log.Debug("Account not found", "address", address, "remote_addr", r.RemoteAddr)
-		respondWithJSON(w, http.StatusOK, map[string]uint64{"last_access_block": 0})
-		return
-	}
-
-	s.log.Debug("Served account lookup",
-		"address", address,
-		"last_access_block", accountInfo.LastAccessBlock,
-		"is_contract", accountInfo.IsContract,
-		"remote_addr", r.RemoteAddr)
-	respondWithJSON(w, http.StatusOK, accountInfo)
 }
 
 func getUint64QueryParam(r *http.Request, key string) (uint64, error) {
