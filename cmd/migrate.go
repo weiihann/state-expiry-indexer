@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/clickhouse"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
