@@ -15,27 +15,13 @@
         <user>
             <password>password</password>
             <networks>
-                <ip>::1</ip>
-                <ip>127.0.0.1</ip>
-                <ip>172.16.0.0/12</ip>  <!-- Docker networks -->
-                <ip>192.168.0.0/16</ip>  <!-- Local networks -->
+                <ip>::/0</ip>  <!-- Allow from any network for migration compatibility -->
             </networks>
-            <profile>indexer_profile</profile>
-            <quota>indexer_quota</quota>
+            <profile>default</profile>
+            <quota>default</quota>
             
-            <!-- Database access permissions -->
+            <!-- Full access for migrations and operations -->
             <access_management>1</access_management>
-            <databases>
-                <state_expiry>
-                    <grants>
-                        <grant>SELECT</grant>
-                        <grant>INSERT</grant>
-                        <grant>CREATE</grant>
-                        <grant>DROP</grant>
-                        <grant>ALTER</grant>
-                    </grants>
-                </state_expiry>
-            </databases>
         </user>
     </users>
     
