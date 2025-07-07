@@ -429,10 +429,10 @@ func (c *Config) GetDatabaseConnectionString() string {
 	)
 }
 
-// GetClickHouseConnectionString builds a ClickHouse connection string
+// GetClickHouseConnectionString builds a ClickHouse connection string for golang-migrate
 func (c *Config) GetClickHouseConnectionString() string {
 	return fmt.Sprintf(
-		"http://%s:%s@%s:%s/%s",
+		"clickhouse://%s:%s@%s:%s/%s?x-migrations-table-engine=MergeTree",
 		c.ClickHouseUser,
 		c.ClickHousePassword,
 		c.ClickHouseHost,
