@@ -51,8 +51,8 @@
         <!-- Optimized profile for indexer application -->
         <indexer_profile>
             <!-- Memory settings for large operations -->
-            <max_memory_usage>0</max_memory_usage>  <!-- Use all available memory -->
-            <max_memory_usage_for_user>0</max_memory_usage_for_user>
+            <max_memory_usage>107374182400</max_memory_usage>  <!-- 100GB -->
+            <max_memory_usage_for_user>107374182400</max_memory_usage_for_user>
             <memory_profiler_step>4194304</memory_profiler_step>  <!-- 4MB -->
             
             <!-- Query optimization -->
