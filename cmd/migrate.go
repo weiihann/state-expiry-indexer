@@ -450,12 +450,12 @@ func init() {
 }
 
 // RunMigrationsUp runs all pending migrations programmatically
-// Used by the run command to ensure database is up to date before starting services
-func RunMigrationsUp(config internal.Config) error {
+// Used by the run command to ensure database is tup to date before starting services
+func RunMigrationsUp(config internal.Config, path string) error {
 	log := logger.GetLogger("migrate-auto")
 
 	if config.ArchiveMode {
-		return RunClickHouseMigrationsUp(config)
+		return RunClickHouseMigrationsUp(config, path)
 	}
 
 	// Create database connection
@@ -473,7 +473,7 @@ func RunMigrationsUp(config internal.Config) error {
 
 	// Create migrate instance
 	m, err := migrate.NewWithDatabaseInstance(
-		"file://db/migrations",
+		"file://"+path,
 		"postgres", driver)
 	if err != nil {
 		return fmt.Errorf("could not create migrate instance: %w", err)
@@ -495,7 +495,7 @@ func RunMigrationsUp(config internal.Config) error {
 
 // RunClickHouseMigrationsUp runs all pending ClickHouse migrations programmatically
 // Used by the run command with --archive flag to ensure ClickHouse database is up to date
-func RunClickHouseMigrationsUp(config internal.Config) error {
+func RunClickHouseMigrationsUp(config internal.Config, path string) error {
 	log := logger.GetLogger("migrate-ch-auto")
 
 	// Get ClickHouse connection string
@@ -503,7 +503,7 @@ func RunClickHouseMigrationsUp(config internal.Config) error {
 
 	// Create migrate instance with ClickHouse
 	m, err := migrate.New(
-		"file://db/ch-migrations",
+		"file://"+path,
 		connectionString)
 	if err != nil {
 		return fmt.Errorf("could not create ClickHouse migrate instance: %w", err)
