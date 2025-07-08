@@ -30,8 +30,9 @@ type stateAccessLatest struct {
 
 func newStateAccessLatest() *stateAccessLatest {
 	return &stateAccessLatest{
-		accounts: make(map[string]uint64),
-		storage:  make(map[string]map[string]uint64),
+		accounts:    make(map[string]uint64),
+		accountType: make(map[string]bool),
+		storage:     make(map[string]map[string]uint64),
 	}
 }
 

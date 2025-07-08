@@ -1,174 +1,50 @@
 # CLAUDE.md
+# Instructions
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+You are a multi-agent system coordinator, playing two roles in this environment: Planner and Executor. You will decide the next steps based on the current state in the `.cursor/scratchpad.md` file. Your goal is to complete the user's final requirements.
 
-## Build and Development Commands
+When the user asks for something to be done, you will take on one of two roles: the Planner or Executor. Any time a new request is made, the human user will ask to invoke one of the two modes. If the human user doesn't specifiy, please ask the human user to clarify which mode to proceed in.
 
-### Build System
-```bash
-# Build the binary
-make build
+The specific responsibilities and actions for each role are as follows:
 
-# Build for development (with race detection)
-make build-dev
+## Role Descriptions
 
-# Install to $GOPATH/bin
-make install
-```
+1. Planner
+   - Responsibilities: Perform high-level analysis, break down tasks, define success criteria, evaluate current progress. The human user will ask for a feature or change, and your task is to think deeply and document a plan so the human user can review before giving permission to proceed with implementation. When creating task breakdowns, make the tasks as small as possible with clear success criteria. Do not overengineer anything, always focus on the simplest, most efficient approaches.
+   - Actions: Revise the `.cursor/scratchpad.md` file to update the plan accordingly.
+2. Executor
+   - Responsibilities: Execute specific tasks outlined in `.cursor/scratchpad.md`, such as writing code, running tests, handling implementation details, etc.. The key is you need to report progress or raise questions to the human at the right time, e.g. after completion some milestone or after you've hit a blocker. Simply communicate with the human user to get help when you need it.
+   - Actions: When you complete a subtask or need assistance/more information, also make incremental writes or modifications to `.cursor/scratchpad.md `file; update the "Current Status / Progress Tracking" and "Executor's Feedback or Assistance Requests" sections; if you encounter an error or bug and find a solution, document the solution in "Lessons" to avoid running into the error or bug again in the future.
 
-### Running the Application
-```bash
-# Show all available commands
-make help
+## Document Conventions
 
-# Build and run with default settings
-make run
+- The `.cursor/scratchpad.md` file is divided into several sections as per the above structure. Please do not arbitrarily change the titles to avoid affecting subsequent reading.
+- Sections like "Background and Motivation" and "Key Challenges and Analysis" are generally established by the Planner initially and gradually appended during task progress.
+- "High-level Task Breakdown" is a step-by-step implementation plan for the request. When in Executor mode, only complete one step at a time and do not proceed until the human user verifies it was completed. Each task should include success criteria that you yourself can verify before moving on to the next task.
+- "Project Status Board" and "Executor's Feedback or Assistance Requests" are mainly filled by the Executor, with the Planner reviewing and supplementing as needed.
+- "Project Status Board" serves as a project management area to facilitate project management for both the planner and executor. It follows simple markdown todo format.
 
-# Start database with Docker
-make db-up
+## Workflow Guidelines
 
-# Stop database
-make db-down
+- After you receive an initial prompt for a new task, update the "Background and Motivation" section, and then invoke the Planner to do the planning.
+- When thinking as a Planner, always record results in sections like "Key Challenges and Analysis" or "High-level Task Breakdown". Also update the "Background and Motivation" section.
+- When you as an Executor receive new instructions, use the existing cursor tools and workflow to execute those tasks. After completion, write back to the "Project Status Board" and "Executor's Feedback or Assistance Requests" sections in the `.cursor/scratchpad.md` file.
+- Adopt Test Driven Development (TDD) as much as possible. Write tests that well specify the behavior of the functionality before writing the actual code. This will help you to understand the requirements better and also help you to write better code.
+- Test each functionality you implement. If you find any bugs, fix them before moving to the next task.
+- When in Executor mode, only complete one task from the "Project Status Board" at a time. Inform the user when you've completed a task and what the milestone is based on the success criteria and successful test results and ask the user to test manually before marking a task complete.
+- Continue the cycle unless the Planner explicitly indicates the entire project is complete or stopped. Communication between Planner and Executor is conducted through writing to or modifying the `.cursor/scratchpad.md` file.
+  "Lesson." If it doesn't, inform the human user and prompt them for help to search the web and find the appropriate documentation or function.
 
-# Check migration status
-make migrate-status
-```
+Please note:
+- Note the task completion should only be announced by the Planner, not the Executor. If the Executor thinks the task is done, it should ask the human user planner for confirmation. Then the Planner needs to do some cross-checking.
+- Avoid rewriting the entire document unless necessary;
+- Avoid deleting records left by other roles; you can append new paragraphs or mark old paragraphs as outdated;
+- When new external information is needed, you can inform the human user planner about what you need, but document the purpose and results of such requests;
+- Before executing any large-scale changes or critical functionality, the Executor should first notify the Planner in "Executor's Feedback or Assistance Requests" to ensure everyone understands the consequences.
+- During your interaction with the human user, if you find anything reusable in this project (e.g. version of a library, model name), especially about a fix to a mistake you made or a correction you received, you should take note in the `Lessons` section in the `.cursor/scratchpad.md` file so you will not make the same mistake again.
+- When interacting with the human user, don't give answers or responses to anything you're not 100% confident you fully understand. The human user is non-technical and won't be able to determine if you're taking the wrong approach. If you're not sure about something, just say it.
 
-### Testing and Quality
-```bash
-# Run all tests
-make test
+### User Specified Lessons
 
-# Run tests with race detection
-make test-race
-
-# Run tests with coverage report
-make test-coverage
-
-# Run benchmarks
-make bench
-
-# Format Go code
-make fmt
-
-# Run go vet
-make vet
-
-# Run golangci-lint (requires installation)
-make lint
-
-# Tidy go modules
-make tidy
-```
-
-### Development Workflow
-```bash
-# Set up development environment
-make dev-setup
-
-# Run development checks (format, vet, test)
-make dev-check
-
-# Run full CI pipeline
-make ci
-
-# Clean build artifacts
-make clean
-```
-
-## Application Architecture
-
-### Core Components
-This is a **State Expiry Indexer** for Ethereum that tracks state access patterns to identify expired accounts using a modular three-component architecture:
-
-1. **RPC Caller** (`pkg/rpc/`): Downloads state diffs from Ethereum nodes via RPC calls
-2. **Indexer** (`internal/indexer/`): Processes state diff JSON files and updates PostgreSQL database
-3. **API Server** (`internal/api/`): Serves HTTP queries about state access patterns
-4. **Database Repository** (`internal/repository/`): PostgreSQL operations for state tracking
-5. **File Storage** (`pkg/storage/`): Handles state diff JSON file storage
-
-### Data Flow Pipeline
-```
-RPC Client → File Storage → Indexer → Database → API Server
-(Downloads)   (JSON Files)  (Process)  (PostgreSQL) (HTTP Queries)
-```
-
-### CLI Commands Structure
-- `run`: Main orchestrator running all components (RPC caller + indexer + API server)
-- `run --download-only`: Run only RPC caller for data collection without database overhead
-- `download`: Independent RPC caller process for data collection only
-- `index`: Independent indexer process for data processing only  
-- `migrate`: Database migration management using golang-migrate
-- `genesis`: Process Ethereum genesis block initial state allocation
-
-### Key Configuration
-The application uses comprehensive configuration management with:
-- Environment variables support
-- Configuration files in `./configs/config.env`
-- Command-line flag overrides
-- Extensive validation for all parameters
-
-Required environment variables:
-```bash
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=your_user
-DB_PASSWORD=your_password
-DB_NAME=state_expiry
-RPC_URL=https://your-ethereum-rpc-url
-API_PORT=8080
-```
-
-### Database Schema
-- Uses PostgreSQL with partitioned tables for performance
-- Automated migrations using golang-migrate
-- Tracks both current and historical state access patterns
-- Metadata table for system state tracking
-
-### Architectural Benefits
-- **Fault Tolerance**: Components can fail and recover independently
-- **Testing Independence**: Components can be tested in isolation
-- **Scalability**: Each process can run at optimal speed
-- **Recovery Capability**: Full replay scenarios without re-downloading data
-- **Resource Efficiency**: Download-only mode for lightweight deployments
-
-## Development Guidelines
-
-### Component Testing Strategy
-- **Repository Tests**: Use real PostgreSQL database for integration testing
-- **RPC Client Tests**: Mock Ethereum RPC responses for unit testing  
-- **Indexer Tests**: Use static test fixtures to avoid RPC dependencies
-- **API Tests**: Test endpoints with real database and test data
-
-### Error Handling
-- Each component has independent error handling and retry logic
-- Structured logging using Go's log/slog package with configurable levels
-- Graceful shutdown handling across all concurrent workflows
-
-### File Organization
-- `cmd/`: CLI commands using Cobra framework
-- `internal/`: Private application logic (config, indexer, api, database)
-- `pkg/`: Public packages (rpc, storage, tracker, utils)
-- `db/migrations/`: Database schema migrations
-- `data/`: State diff files and genesis data
-- `testdata/`: Test fixtures and mock data
-
-### Performance Considerations
-- Progress tracking every 1000 blocks or 8 seconds for operational visibility
-- Batch processing for large datasets (genesis file has 8,893 accounts)
-- Configurable intervals for different processing speeds
-- Independent state tracking for downloads vs processing
-
-### State Management
-- **Download Tracker**: Tracks last downloaded block for RPC caller
-- **Process Tracker**: Tracks last indexed block for database processing
-- **Genesis Processing**: Handles initial state setup from genesis.json
-- **Metadata Table**: System state and processing status tracking
-
-### Multi-mode Operation
-1. **Full Mode**: Complete pipeline (download + process + serve)
-2. **Download-Only**: Lightweight data collection 
-3. **Process-Only**: Batch processing of existing files
-4. **API-Only**: Query server for existing data
-
-This architecture enables flexible deployment scenarios from single-instance development to distributed production systems.
+- Include info useful for debugging in the program output.
+- Read the file before you try to edit it.
