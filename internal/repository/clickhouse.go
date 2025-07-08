@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
-	"github.com/weiihann/state-expiry-indexer/pkg/utils"
 )
 
 // ClickHouseRepository implements StateRepositoryInterface for ClickHouse archive mode
@@ -106,6 +105,7 @@ func (r *ClickHouseRepository) insertAccountAccessEventsInTx(ctx context.Context
 	log := logger.GetLogger("clickhouse-repo")
 
 	// ClickHouse INSERT statement for accounts_archive table
+	// Use unhex() to convert hex strings to FixedString(20) in ClickHouse
 	query := `INSERT INTO accounts_archive (address, block_number, is_contract) VALUES `
 
 	var values []interface{}
@@ -113,11 +113,12 @@ func (r *ClickHouseRepository) insertAccountAccessEventsInTx(ctx context.Context
 	paramIdx := 1
 
 	for address, blockNumber := range accounts {
-		// Convert address to binary format (FixedString(20))
-		addressBytes, err := utils.HexToBytes(address)
-		if err != nil {
-			log.Warn("Skipping invalid address", "address", address, "error", err)
-			continue
+		// Clean the address hex string (remove 0x prefix and ensure proper length)
+		addressHex := strings.TrimPrefix(address, "0x")
+
+		if len(addressHex) != 40 {
+			log.Error("Invalid address length", "address", address, "hex_length", len(addressHex))
+			return fmt.Errorf("invalid address length: %s", address)
 		}
 
 		// Get account type (default to false if not found)
@@ -129,8 +130,8 @@ func (r *ClickHouseRepository) insertAccountAccessEventsInTx(ctx context.Context
 			isContractByte = 0
 		}
 
-		placeholders = append(placeholders, "(?, ?, ?)")
-		values = append(values, addressBytes, blockNumber, isContractByte)
+		placeholders = append(placeholders, "(unhex(?), ?, ?)")
+		values = append(values, addressHex, blockNumber, isContractByte)
 		paramIdx += 3
 	}
 
@@ -140,9 +141,25 @@ func (r *ClickHouseRepository) insertAccountAccessEventsInTx(ctx context.Context
 
 	fullQuery := query + strings.Join(placeholders, ", ")
 
+	// Debug logging before execution
+	log.Debug("Executing ClickHouse account insert",
+		"query", fullQuery,
+		"values_count", len(values),
+		"placeholders_count", len(placeholders))
+
 	_, err := tx.ExecContext(ctx, fullQuery, values...)
 	if err != nil {
-		log.Error("Could not insert account access events", "error", err, "accounts_count", len(accounts))
+		// Show first few values for debugging
+		debugValues := values
+		if len(values) > 6 {
+			debugValues = values[:6]
+		}
+		log.Error("Could not insert account access events",
+			"error", err,
+			"accounts_count", len(accounts),
+			"query", fullQuery,
+			"values_count", len(values),
+			"first_few_values", debugValues)
 		return fmt.Errorf("could not insert account access events: %w", err)
 	}
 
@@ -165,23 +182,25 @@ func (r *ClickHouseRepository) insertStorageAccessEventsInTx(ctx context.Context
 	var placeholders []string
 
 	for address, slots := range storage {
-		// Convert address to binary format (FixedString(20))
-		addressBytes, err := utils.HexToBytes(address)
-		if err != nil {
-			log.Warn("Skipping invalid address in storage", "address", address, "error", err)
-			continue
+		// Clean the address hex string (remove 0x prefix and ensure proper length)
+		addressHex := strings.TrimPrefix(address, "0x")
+
+		if len(addressHex) != 40 {
+			log.Error("Invalid address length", "address", address, "hex_length", len(addressHex))
+			return fmt.Errorf("invalid address length: %s", address)
 		}
 
 		for slot, blockNumber := range slots {
-			// Convert slot to binary format (FixedString(32))
-			slotBytes, err := utils.HexToBytes(slot)
-			if err != nil {
-				log.Warn("Skipping invalid slot", "address", address, "slot", slot, "error", err)
-				continue
+			// Clean the slot hex string (remove 0x prefix and ensure proper length)
+			slotHex := strings.TrimPrefix(slot, "0x")
+
+			if len(slotHex) != 64 {
+				log.Error("Invalid slot length", "slot", slot, "hex_length", len(slotHex))
+				return fmt.Errorf("invalid slot length: %s", slot)
 			}
 
-			placeholders = append(placeholders, "(?, ?, ?)")
-			values = append(values, addressBytes, slotBytes, blockNumber)
+			placeholders = append(placeholders, "(unhex(?), unhex(?), ?)")
+			values = append(values, addressHex, slotHex, blockNumber)
 		}
 	}
 
@@ -224,98 +243,6 @@ func (r *ClickHouseRepository) countStorageSlots(storage map[string]map[string]u
 		total += len(slots)
 	}
 	return total
-}
-
-// API query methods (used by API server)
-func (r *ClickHouseRepository) GetStateLastAccessedBlock(ctx context.Context, address string, slot *string) (uint64, error) {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// Convert address to binary format
-	addressBytes, err := utils.HexToBytes(address)
-	if err != nil {
-		log.Error("Invalid address format", "address", address, "error", err)
-		return 0, fmt.Errorf("invalid address format: %w", err)
-	}
-
-	if slot == nil {
-		// Query account access using latest_account_access view
-		query := `SELECT last_access_block FROM latest_account_access WHERE address = ?`
-
-		var lastAccessBlock uint64
-		err := r.db.QueryRowContext(ctx, query, addressBytes).Scan(&lastAccessBlock)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				log.Debug("Account not found", "address", address)
-				return 0, fmt.Errorf("account not found")
-			}
-			log.Error("Could not query account last access", "address", address, "error", err)
-			return 0, fmt.Errorf("could not query account last access: %w", err)
-		}
-
-		log.Debug("Retrieved account last access", "address", address, "block", lastAccessBlock)
-		return lastAccessBlock, nil
-	} else {
-		// Query storage access using latest_storage_access view
-		slotBytes, err := utils.HexToBytes(*slot)
-		if err != nil {
-			log.Error("Invalid slot format", "slot", *slot, "error", err)
-			return 0, fmt.Errorf("invalid slot format: %w", err)
-		}
-
-		query := `SELECT last_access_block FROM latest_storage_access WHERE address = ? AND slot_key = ?`
-
-		var lastAccessBlock uint64
-		err = r.db.QueryRowContext(ctx, query, addressBytes, slotBytes).Scan(&lastAccessBlock)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				log.Debug("Storage slot not found", "address", address, "slot", *slot)
-				return 0, fmt.Errorf("storage slot not found")
-			}
-			log.Error("Could not query storage last access", "address", address, "slot", *slot, "error", err)
-			return 0, fmt.Errorf("could not query storage last access: %w", err)
-		}
-
-		log.Debug("Retrieved storage last access", "address", address, "slot", *slot, "block", lastAccessBlock)
-		return lastAccessBlock, nil
-	}
-}
-
-func (r *ClickHouseRepository) GetAccountInfo(ctx context.Context, address string) (*Account, error) {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// Convert address to binary format
-	addressBytes, err := utils.HexToBytes(address)
-	if err != nil {
-		log.Error("Invalid address format", "address", address, "error", err)
-		return nil, fmt.Errorf("invalid address format: %w", err)
-	}
-
-	// Query using latest_account_access view
-	query := `SELECT last_access_block, is_contract FROM latest_account_access WHERE address = ?`
-
-	var lastAccessBlock uint64
-	var isContractByte uint8
-	err = r.db.QueryRowContext(ctx, query, addressBytes).Scan(&lastAccessBlock, &isContractByte)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Debug("Account not found", "address", address)
-			return nil, fmt.Errorf("account not found")
-		}
-		log.Error("Could not query account info", "address", address, "error", err)
-		return nil, fmt.Errorf("could not query account info: %w", err)
-	}
-
-	// Convert UInt8 back to bool
-	isContract := isContractByte == 1
-
-	account := &Account{
-		Address:         address,
-		LastAccessBlock: lastAccessBlock,
-		IsContract:      &isContract,
-	}
-
-	log.Debug("Retrieved account info", "address", address, "last_access", lastAccessBlock, "is_contract", isContract)
-	return account, nil
 }
 
 func (r *ClickHouseRepository) GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error) {
@@ -458,37 +385,6 @@ func (r *ClickHouseRepository) GetTopNExpiredContracts(ctx context.Context, expi
 
 	log.Debug("Retrieved top expired contracts", "count", len(contracts), "expiry_block", expiryBlock)
 	return contracts, nil
-}
-
-func (r *ClickHouseRepository) GetAccountType(ctx context.Context, address string) (*bool, error) {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// Convert address to binary format
-	addressBytes, err := utils.HexToBytes(address)
-	if err != nil {
-		log.Error("Invalid address format", "address", address, "error", err)
-		return nil, fmt.Errorf("invalid address format: %w", err)
-	}
-
-	// Query using latest_account_access view
-	query := `SELECT is_contract FROM latest_account_access WHERE address = ?`
-
-	var isContractByte uint8
-	err = r.db.QueryRowContext(ctx, query, addressBytes).Scan(&isContractByte)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Debug("Account not found", "address", address)
-			return nil, fmt.Errorf("account not found")
-		}
-		log.Error("Could not query account type", "address", address, "error", err)
-		return nil, fmt.Errorf("could not query account type: %w", err)
-	}
-
-	// Convert UInt8 back to bool
-	isContract := isContractByte == 1
-
-	log.Debug("Retrieved account type", "address", address, "is_contract", isContract)
-	return &isContract, nil
 }
 
 func (r *ClickHouseRepository) GetExpiredAccountsByType(ctx context.Context, expiryBlock uint64, isContract *bool) ([]Account, error) {

@@ -9,9 +9,7 @@ import (
 // HexToBytes converts a hex string to a byte slice.
 // It handles the "0x" prefix if present.
 func HexToBytes(s string) ([]byte, error) {
-	if strings.HasPrefix(s, "0x") {
-		s = s[2:]
-	}
+	s = strings.TrimPrefix(s, "0x")
 	if len(s)%2 != 0 {
 		s = "0" + s
 	}
