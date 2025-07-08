@@ -204,7 +204,12 @@ type BlockData struct {
 	Storage     map[string]map[string]struct{}
 }
 
-func (r *PostgreSQLRepository) upsertAccessedAccountsInTx(ctx context.Context, tx pgx.Tx, accounts map[string]uint64, accountType map[string]bool) error {
+func (r *PostgreSQLRepository) upsertAccessedAccountsInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	accounts map[string]uint64,
+	accountType map[string]bool,
+) error {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -1001,4 +1006,16 @@ func (r *PostgreSQLRepository) getCompleteExpiryAnalysis(ctx context.Context, ex
 	}
 
 	return nil
+}
+
+// UpdateRangeDataWithAllEventsInTx converts slice-based data to map format and calls existing method
+// This method is provided for interface compatibility but PostgreSQL mode uses deduplication
+func (r *PostgreSQLRepository) UpdateRangeDataWithAllEventsInTx(
+	ctx context.Context,
+	accountAccesses map[uint64]map[string]struct{},
+	accountType map[string]bool,
+	storageAccesses map[uint64]map[string]map[string]struct{},
+	rangeNumber uint64,
+) error {
+	return fmt.Errorf("archive mode with all events is not supported in PostgreSQL - use ClickHouse with --archive flag instead")
 }

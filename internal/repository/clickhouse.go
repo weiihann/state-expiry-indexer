@@ -48,7 +48,13 @@ func (r *ClickHouseRepository) GetLastIndexedRange(ctx context.Context) (uint64,
 	return rangeNumber, nil
 }
 
-func (r *ClickHouseRepository) UpdateRangeDataInTx(ctx context.Context, accounts map[string]uint64, accountType map[string]bool, storage map[string]map[string]uint64, rangeNumber uint64) error {
+func (r *ClickHouseRepository) UpdateRangeDataInTx(
+	ctx context.Context,
+	accounts map[string]uint64,
+	accountType map[string]bool,
+	storage map[string]map[string]uint64,
+	rangeNumber uint64,
+) error {
 	log := logger.GetLogger("clickhouse-repo")
 
 	log.Info("Starting ClickHouse range data update",
@@ -97,7 +103,12 @@ func (r *ClickHouseRepository) UpdateRangeDataInTx(ctx context.Context, accounts
 }
 
 // insertAccountAccessEventsInTx inserts ALL account access events for archive mode
-func (r *ClickHouseRepository) insertAccountAccessEventsInTx(ctx context.Context, tx *sql.Tx, accounts map[string]uint64, accountType map[string]bool) error {
+func (r *ClickHouseRepository) insertAccountAccessEventsInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	accounts map[string]uint64,
+	accountType map[string]bool,
+) error {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -808,4 +819,180 @@ func (r *ClickHouseRepository) getBaseStatistics(ctx context.Context, expiryBloc
 		"expired_slots", stats.ExpiredSlots)
 
 	return &stats, nil
+}
+
+// UpdateRangeDataWithAllEventsInTx processes all events for archive mode (stores ALL events, not just latest)
+func (r *ClickHouseRepository) UpdateRangeDataWithAllEventsInTx(
+	ctx context.Context,
+	accountAccesses map[uint64]map[string]struct{},
+	accountType map[string]bool,
+	storageAccesses map[uint64]map[string]map[string]struct{},
+	rangeNumber uint64,
+) error {
+	log := logger.GetLogger("clickhouse-repo")
+
+	log.Info("Starting ClickHouse archive mode update with all events",
+		"range_number", rangeNumber,
+		"account_events", len(accountAccesses),
+		"storage_events", len(storageAccesses))
+
+	// Start transaction
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Error("Could not begin transaction", "error", err)
+		return fmt.Errorf("could not begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert all account access events
+	if err := r.insertAllAccountAccessEventsInTx(ctx, tx, accountAccesses, accountType); err != nil {
+		log.Error("Could not insert all account access events", "error", err)
+		return fmt.Errorf("could not insert all account access events: %w", err)
+	}
+
+	// Insert all storage access events
+	if err := r.insertAllStorageAccessEventsInTx(ctx, tx, storageAccesses); err != nil {
+		log.Error("Could not insert all storage access events", "error", err)
+		return fmt.Errorf("could not insert all storage access events: %w", err)
+	}
+
+	// Update the last indexed range
+	if err := r.updateLastIndexedRangeInTx(ctx, tx, rangeNumber); err != nil {
+		log.Error("Could not update last indexed range", "error", err)
+		return fmt.Errorf("could not update last indexed range: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.Error("Could not commit transaction", "error", err)
+		return fmt.Errorf("could not commit transaction: %w", err)
+	}
+
+	log.Info("Successfully completed ClickHouse archive mode update with all events",
+		"range_number", rangeNumber,
+		"account_events_inserted", len(accountAccesses),
+		"storage_events_inserted", len(storageAccesses))
+
+	return nil
+}
+
+// insertAllAccountAccessEventsInTx inserts ALL account access events for archive mode
+func (r *ClickHouseRepository) insertAllAccountAccessEventsInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountAccesses map[uint64]map[string]struct{},
+	accountType map[string]bool,
+) error {
+	if len(accountAccesses) == 0 {
+		return nil
+	}
+
+	log := logger.GetLogger("clickhouse-repo")
+
+	// ClickHouse INSERT statement for accounts_archive table
+	query := `INSERT INTO accounts_archive (address, block_number, is_contract) VALUES `
+
+	var values []interface{}
+	var placeholders []string
+
+	for blockNumber, access := range accountAccesses {
+		for addr := range access {
+			// Clean the address hex string (remove 0x prefix and ensure proper length)
+			addressHex := strings.TrimPrefix(addr, "0x")
+
+			if len(addressHex) != 40 {
+				log.Error("Invalid address length", "address", addr, "hex_length", len(addressHex))
+				return fmt.Errorf("invalid address length: %s", addr)
+			}
+
+			placeholders = append(placeholders, "(unhex(?), ?, ?)")
+			values = append(values, addressHex, blockNumber, func() uint8 {
+				isContract := accountType[addr]
+				if isContract {
+					return 1
+				}
+				return 0
+			}())
+		}
+	}
+
+	if len(placeholders) == 0 {
+		return nil // No valid account accesses to insert
+	}
+
+	fullQuery := query + strings.Join(placeholders, ", ")
+
+	_, err := tx.ExecContext(ctx, fullQuery, values...)
+	if err != nil {
+		// Show first few values for debugging
+		debugValues := values
+		if len(values) > 6 {
+			debugValues = values[:6]
+		}
+		log.Error("Could not insert all account access events",
+			"error", err,
+			"account_events", len(accountAccesses),
+			"query", fullQuery,
+			"values_count", len(values),
+			"first_few_values", debugValues)
+		return fmt.Errorf("could not insert all account access events: %w", err)
+	}
+
+	log.Debug("Inserted all account access events", "count", len(accountAccesses))
+	return nil
+}
+
+// insertAllStorageAccessEventsInTx inserts ALL storage access events for archive mode
+func (r *ClickHouseRepository) insertAllStorageAccessEventsInTx(ctx context.Context, tx *sql.Tx, storageAccesses map[uint64]map[string]map[string]struct{}) error {
+	if len(storageAccesses) == 0 {
+		return nil
+	}
+
+	log := logger.GetLogger("clickhouse-repo")
+
+	// ClickHouse INSERT statement for storage_archive table
+	query := `INSERT INTO storage_archive (address, slot_key, block_number) VALUES `
+
+	var values []interface{}
+	var placeholders []string
+
+	for blockNumber, record := range storageAccesses {
+		for addr, slot := range record {
+			// Clean the address hex string (remove 0x prefix and ensure proper length)
+			addressHex := strings.TrimPrefix(addr, "0x")
+			if len(addressHex) != 40 {
+				log.Error("Invalid address length", "address", addr, "hex_length", len(addressHex))
+				return fmt.Errorf("invalid address length: %s", addr)
+			}
+
+			for slotKey := range slot {
+				slotHex := strings.TrimPrefix(slotKey, "0x")
+				if len(slotHex) != 64 {
+					log.Error("Invalid slot length", "slot", slotKey, "hex_length", len(slotHex))
+					return fmt.Errorf("invalid slot length: %s", slotKey)
+				}
+
+				placeholders = append(placeholders, "(unhex(?), unhex(?), ?)")
+				values = append(values, addressHex, slotHex, blockNumber)
+			}
+		}
+	}
+
+	if len(placeholders) == 0 {
+		return nil // No valid storage accesses to insert
+	}
+
+	fullQuery := query + strings.Join(placeholders, ", ")
+
+	_, err := tx.ExecContext(ctx, fullQuery, values...)
+	if err != nil {
+		log.Error("Could not insert all storage access events",
+			"error", err,
+			"storage_events", len(storageAccesses),
+			"total_events", len(placeholders))
+		return fmt.Errorf("could not insert all storage access events: %w", err)
+	}
+
+	log.Debug("Inserted all storage access events", "count", len(storageAccesses))
+	return nil
 }

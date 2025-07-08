@@ -15,14 +15,14 @@ import (
 // RangeProcessor handles downloading and processing of block ranges
 type RangeProcessor struct {
 	dataDir   string
-	rpcClient *rpc.Client
+	rpcClient rpc.ClientInterface
 	rangeSize int
 	encoder   *utils.ZstdEncoder
 	decoder   *utils.ZstdDecoder
 }
 
 // NewRangeProcessor creates a new range processor
-func NewRangeProcessor(dataDir string, rpcClient *rpc.Client, rangeSize int) (*RangeProcessor, error) {
+func NewRangeProcessor(dataDir string, rpcClient rpc.ClientInterface, rangeSize int) (*RangeProcessor, error) {
 	encoder, err := utils.NewZstdEncoder()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zstd encoder: %w", err)
