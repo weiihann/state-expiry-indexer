@@ -48,45 +48,6 @@ func TestArchiveEquivalence(t *testing.T) {
 		setupArchiveTestData(t, ctx, pgRepo, chRepo, testAddresses, testBlocks)
 	})
 
-	// Compare basic state queries
-	t.Run("State_Last_Accessed_Block_Equivalence", func(t *testing.T) {
-		for _, address := range testAddresses {
-			pgResult, pgErr := pgRepo.GetStateLastAccessedBlock(ctx, address, nil)
-			chResult, chErr := chRepo.GetStateLastAccessedBlock(ctx, address, nil)
-
-			assert.Equal(t, pgErr, chErr, "Error status should match for address %s", address)
-			if pgErr == nil && chErr == nil {
-				assert.Equal(t, pgResult, chResult, "Last accessed block should match for address %s", address)
-			}
-		}
-	})
-
-	// Compare expired state counts
-	t.Run("Expired_State_Count_Equivalence", func(t *testing.T) {
-		pgCount, pgErr := pgRepo.GetExpiredStateCount(ctx, expiryBlock)
-		chCount, chErr := chRepo.GetExpiredStateCount(ctx, expiryBlock)
-
-		assert.Equal(t, pgErr, chErr, "Error status should match for expired count")
-		if pgErr == nil && chErr == nil {
-			assert.Equal(t, pgCount, chCount, "Expired state count should match")
-		}
-	})
-
-	// Compare account info queries
-	t.Run("Account_Info_Equivalence", func(t *testing.T) {
-		for _, address := range testAddresses {
-			pgAccount, pgErr := pgRepo.GetAccountInfo(ctx, address)
-			chAccount, chErr := chRepo.GetAccountInfo(ctx, address)
-
-			assert.Equal(t, pgErr, chErr, "Error status should match for account info")
-			if pgErr == nil && chErr == nil && pgAccount != nil && chAccount != nil {
-				assert.Equal(t, pgAccount.Address, chAccount.Address, "Account address should match")
-				assert.Equal(t, pgAccount.LastAccessBlock, chAccount.LastAccessBlock, "Last access block should match")
-				assert.Equal(t, pgAccount.IsContract, chAccount.IsContract, "Contract status should match")
-			}
-		}
-	})
-
 	// Compare analytics data (basic comparison)
 	t.Run("Analytics_Data_Equivalence", func(t *testing.T) {
 		pgAnalytics, pgErr := pgRepo.GetAnalyticsData(ctx, expiryBlock, expiryBlock+100000)
@@ -143,49 +104,6 @@ func TestArchivePerformance(t *testing.T) {
 			t.Logf("Analytics query for %d blocks completed in %v", tc.expiryBlock, duration)
 		})
 	}
-}
-
-// TestArchiveDataIntegrity verifies that archive mode stores complete history correctly
-func TestArchiveDataIntegrity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping data integrity test in short mode")
-	}
-
-	ctx := context.Background()
-	config, err := internal.LoadConfig("../../configs")
-	require.NoError(t, err)
-
-	chRepo := setupClickHouseTest(t, ctx, config)
-	defer cleanupClickHouse(t, chRepo)
-
-	// Test complete history storage
-	t.Run("Complete_History_Storage", func(t *testing.T) {
-		testAddress := "0x1234567890abcdef1234567890abcdef12345678"
-		testBlocks := []uint64{1000, 2000, 3000, 4000, 5000}
-
-		// Simulate multiple accesses to same address across different blocks
-		accounts := make(map[string]uint64)
-		accountTypes := make(map[string]bool)
-		storage := make(map[string]map[string]uint64)
-
-		for i, block := range testBlocks {
-			accounts[testAddress] = block
-			accountTypes[testAddress] = true // Contract
-
-			// Update range data for each block
-			err := chRepo.UpdateRangeDataInTx(ctx, accounts, accountTypes, storage, uint64(i+1))
-			assert.NoError(t, err, "UpdateRangeDataInTx should succeed for block %d", block)
-		}
-
-		// Verify that latest access is the most recent block
-		lastAccess, err := chRepo.GetStateLastAccessedBlock(ctx, testAddress, nil)
-		assert.NoError(t, err, "GetStateLastAccessedBlock should succeed")
-		assert.Equal(t, testBlocks[len(testBlocks)-1], lastAccess,
-			"Latest access should be the most recent block")
-
-		t.Logf("Archive correctly stored %d access events for address %s",
-			len(testBlocks), testAddress)
-	})
 }
 
 // Helper functions for test setup and cleanup

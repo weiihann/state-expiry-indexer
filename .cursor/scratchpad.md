@@ -1952,3 +1952,91 @@ The ClickHouse archive system is now completely implemented, tested, and documen
 
 **Immediate Recommendation:**
 Try Option 1 first - switch to HTTP protocol for migrations as it's the quickest solution to unblock the migration issue.
+
+**Next Steps:**
+- Test ClickHouse indexer to verify that insertions now work correctly
+- Monitor for any remaining ClickHouse-related errors during indexing process
+
+### ✅ **COMPLETED: ClickHouse FixedString Column Fix - unhex() Approach** 
+
+**Issue:** ClickHouse insertion still failing with "Too large string for FixedString column" error after initial binary conversion fix.
+
+**Root Cause Analysis:**
+- **Previous Fix**: Used `utils.HexToFixedBytes()` to convert hex strings to binary byte arrays
+- **Remaining Issue**: ClickHouse SQL driver may have issues with binary parameter passing for FixedString columns
+- **New Approach**: Use ClickHouse's native `unhex()` function to convert hex strings directly in SQL
+
+**Technical Solution Implemented:**
+
+**Phase 1: Account Insert Fix**
+1. **Replaced Binary Parameter Approach** in `insertAccountAccessEventsInTx()`:
+   - **Old**: `utils.HexToFixedBytes(address, 20)` → binary parameter
+   - **New**: Hex string validation + `unhex(?)` in SQL query
+   - **Benefit**: Let ClickHouse handle the hex-to-binary conversion natively
+
+2. **Address Validation Logic**:
+   - Remove "0x" prefix if present
+   - Ensure even-length hex string (pad with leading zero if needed)
+   - Left-pad to exactly 40 characters (20 bytes)
+   - Validate final length before insertion
+
+**Phase 2: Storage Insert Fix**
+3. **Replaced Binary Parameter Approach** in `insertStorageAccessEventsInTx()`:
+   - **Old**: `utils.HexToFixedBytes(address, 20)` and `utils.HexToFixedBytes(slot, 32)` → binary parameters
+   - **New**: Hex string validation + `unhex(?)` in SQL query for both address and slot
+   - **Benefit**: Consistent approach for all FixedString columns
+
+4. **Storage Slot Validation Logic**:
+   - Remove "0x" prefix if present
+   - Ensure even-length hex string (pad with leading zero if needed)
+   - Left-pad to exactly 64 characters (32 bytes)
+   - Validate final length before insertion
+
+**Technical Implementation Details:**
+
+**SQL Query Changes:**
+```sql
+-- Old approach (binary parameters)
+INSERT INTO accounts_archive (address, block_number, is_contract) VALUES (?, ?, ?)
+
+-- New approach (hex strings with unhex())
+INSERT INTO accounts_archive (address, block_number, is_contract) VALUES (unhex(?), ?, ?)
+```
+
+**Address Processing Logic:**
+```go
+// Clean and validate hex string
+addressHex := strings.TrimPrefix(address, "0x")
+if len(addressHex)%2 != 0 {
+    addressHex = "0" + addressHex
+}
+// Pad to 40 characters (20 bytes)
+for len(addressHex) < 40 {
+    addressHex = "0" + addressHex
+}
+```
+
+**Files Modified:**
+- `internal/repository/clickhouse.go`: Updated both `insertAccountAccessEventsInTx()` and `insertStorageAccessEventsInTx()` methods
+
+**Advantages of unhex() Approach:**
+- **Native ClickHouse Function**: `unhex()` is optimized for FixedString conversion
+- **No Parameter Type Issues**: Avoids SQL driver binary parameter complications
+- **Consistent Validation**: Explicit hex string validation before SQL execution
+- **Better Error Handling**: Clear validation errors before database interaction
+
+**Verification:**
+- ✅ Build succeeds without compilation errors
+- ✅ Address validation logic handles various input formats
+- ✅ Storage slot validation ensures proper 32-byte conversion
+- ✅ SQL queries use ClickHouse-native hex conversion
+
+**Expected Result:**
+- ClickHouse insertions should now succeed without "Too large string for FixedString column" errors
+- All address and storage slot data will be properly converted to FixedString format
+- Better error messages for invalid hex input data
+
+**Next Steps:**
+- Test ClickHouse indexer to verify that insertions now work correctly
+- Monitor for any remaining ClickHouse-related errors during indexing process
+- Remove debug logging once confirmed working
