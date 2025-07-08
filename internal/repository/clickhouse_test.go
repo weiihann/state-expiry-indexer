@@ -473,7 +473,7 @@ func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 		// This is different from PostgreSQL which only stores the latest access
 		analytics, err := repo.GetAnalyticsData(ctx, 1150, 1300) // Expiry between blocks 2 and 3
 		require.NoError(t, err)
-		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have account data")
+		assert.Equal(t, analytics.AccountExpiry.TotalAccounts, 1, "Should have account data")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
