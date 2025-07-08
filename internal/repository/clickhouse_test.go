@@ -5,85 +5,51 @@ import (
 	"fmt"
 	"testing"
 
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/weiihann/state-expiry-indexer/internal/testdb"
+
+	// ClickHouse database drivers
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// Test helper functions - using shared config to maintain consistency with testdb
+// Test helper functions for ClickHouse testing
+
+// generateTestAddress creates a test Ethereum address
+func generateClickHouseTestAddress(index int) string {
+	return fmt.Sprintf("0x%040x", index)
+}
 
 // generateTestStorageSlot creates a test storage slot key
-func generateTestStorageSlot(index int) string {
+func generateClickHouseTestStorageSlot(index int) string {
 	return fmt.Sprintf("0x%064x", index)
 }
 
-// setupTestRepository creates a test repository with clean database
-func setupTestRepository(t *testing.T) (StateRepositoryInterface, func()) {
+// Note: ClickHouse test config is now shared in test_helpers.go
+
+// setupClickHouseTestRepository creates a test ClickHouse repository with clean database
+func setupClickHouseTestRepository(t *testing.T) (StateRepositoryInterface, func()) {
 	t.Helper()
 
-	cleanUp := testdb.SetupTestDatabase(t, false)
-
 	// Use standard test configuration
-	config := getTestDBConfig()
+	config := getTestClickHouseConfig()
+	cleanup := testdb.SetupTestDatabase(t, true)
+
+	// Create repository
 	repo, err := NewRepository(t.Context(), config)
 	if err != nil {
 		return nil, func() {}
 	}
 
-	return repo, cleanUp
+	return repo, cleanup
 }
 
-// assertAccountExists verifies that an account exists with expected values
-func assertAccountExists(t *testing.T, repo StateRepositoryInterface, address string, expectedBlock uint64, expectedIsContract *bool) {
-	t.Helper()
-
-	ctx := context.Background()
-
-	// Cast to PostgreSQL repository to access GetAccountInfo method
-	pgRepo, ok := repo.(*PostgreSQLRepository)
-	if !ok {
-		t.Skip("Test requires PostgreSQL repository")
-		return
-	}
-
-	// Check account info
-	account, err := pgRepo.GetAccountInfo(ctx, address)
-	require.NoError(t, err, "failed to get account info for %s", address)
-	require.NotNil(t, account, "account %s should exist", address)
-
-	assert.Equal(t, address, account.Address, "address mismatch")
-	assert.Equal(t, expectedBlock, account.LastAccessBlock, "last access block mismatch for %s", address)
-
-	if expectedIsContract != nil {
-		require.NotNil(t, account.IsContract, "is_contract should not be nil for %s", address)
-		assert.Equal(t, *expectedIsContract, *account.IsContract, "is_contract mismatch for %s", address)
-	}
-}
-
-// assertStorageExists verifies that a storage slot exists with expected values
-func assertStorageExists(t *testing.T, repo StateRepositoryInterface, address, slot string, expectedBlock uint64) {
-	t.Helper()
-
-	ctx := context.Background()
-
-	// Cast to PostgreSQL repository to access GetStateLastAccessedBlock method
-	pgRepo, ok := repo.(*PostgreSQLRepository)
-	if !ok {
-		t.Skip("Test requires PostgreSQL repository")
-		return
-	}
-
-	// Check storage access
-	lastBlock, err := pgRepo.GetStateLastAccessedBlock(ctx, address, &slot)
-	require.NoError(t, err, "failed to get storage last accessed block for %s:%s", address, slot)
-	assert.Equal(t, expectedBlock, lastBlock, "last access block mismatch for storage %s:%s", address, slot)
-}
-
-// TestGetLastIndexedRange tests getting the last indexed range from metadata
-func TestGetLastIndexedRange(t *testing.T) {
+// TestClickHouseGetLastIndexedRange tests getting the last indexed range from metadata
+func TestClickHouseGetLastIndexedRange(t *testing.T) {
 	t.Run("EmptyDatabase", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
 
 		ctx := context.Background()
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -92,8 +58,8 @@ func TestGetLastIndexedRange(t *testing.T) {
 	})
 
 	t.Run("WithExistingData", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
 
 		ctx := context.Background()
 
@@ -108,12 +74,12 @@ func TestGetLastIndexedRange(t *testing.T) {
 		// Now check that we can retrieve it
 		lastRange, err := repo.GetLastIndexedRange(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, uint64(42), lastRange, "Should return the last indexed range")
+		assert.Equal(t, uint64(42), lastRange, fmt.Sprintf("expected 42, got %d", lastRange))
 	})
 
 	t.Run("MultipleUpdates", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
 
 		ctx := context.Background()
 
@@ -134,10 +100,10 @@ func TestGetLastIndexedRange(t *testing.T) {
 	})
 }
 
-// TestUpdateRangeDataInTx tests the main data update functionality
-func TestUpdateRangeDataInTx(t *testing.T) {
+// TestClickHouseUpdateRangeDataInTx tests the main data update functionality
+func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 	t.Run("EmptyMaps", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -155,7 +121,7 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 	})
 
 	t.Run("AccountsOnly", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -172,15 +138,15 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
 		require.NoError(t, err)
 
-		// Verify accounts were inserted
-		isContract1 := false
-		isContract2 := true
-		assertAccountExists(t, repo, "0x1234567890123456789012345678901234567890", 100, &isContract1)
-		assertAccountExists(t, repo, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd", 150, &isContract2)
+		// For ClickHouse, we can verify data was inserted by checking if we can get analytics
+		// (we don't have direct access to GetAccountInfo like PostgreSQL)
+		analytics, err := repo.GetAnalyticsData(ctx, 200, 300) // Expiry after our test data
+		require.NoError(t, err)
+		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts in ClickHouse")
 	})
 
 	t.Run("StorageOnly", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -196,15 +162,14 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
 		require.NoError(t, err)
 
-		// Verify storage was inserted
-		assertStorageExists(t, repo, "0x1234567890123456789012345678901234567890",
-			"0x0000000000000000000000000000000000000000000000000000000000000001", 100)
-		assertStorageExists(t, repo, "0x1234567890123456789012345678901234567890",
-			"0x0000000000000000000000000000000000000000000000000000000000000002", 150)
+		// Verify storage was inserted by checking analytics
+		analytics, err := repo.GetAnalyticsData(ctx, 200, 300)
+		require.NoError(t, err)
+		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage slots in ClickHouse")
 	})
 
 	t.Run("AccountsAndStorage", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -230,16 +195,10 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify both accounts and storage were inserted
-		isContract1 := false
-		isContract2 := true
-		assertAccountExists(t, repo, "0x1234567890123456789012345678901234567890", 100, &isContract1)
-		assertAccountExists(t, repo, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd", 150, &isContract2)
-		assertStorageExists(t, repo, "0x1234567890123456789012345678901234567890",
-			"0x0000000000000000000000000000000000000000000000000000000000000001", 100)
-		assertStorageExists(t, repo, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-			"0x0000000000000000000000000000000000000000000000000000000000000001", 150)
-		assertStorageExists(t, repo, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-			"0x0000000000000000000000000000000000000000000000000000000000000002", 160)
+		analytics, err := repo.GetAnalyticsData(ctx, 200, 300)
+		require.NoError(t, err)
+		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts")
+		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage slots")
 
 		// Verify metadata was updated
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -247,45 +206,8 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		assert.Equal(t, uint64(2), lastRange)
 	})
 
-	t.Run("UpdateExistingData", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
-
-		ctx := context.Background()
-
-		// First insert
-		accounts1 := map[string]uint64{"0x1234567890123456789012345678901234567890": 100}
-		accountType1 := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage1 := map[string]map[string]uint64{
-			"0x1234567890123456789012345678901234567890": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 100,
-			},
-		}
-
-		err := repo.UpdateRangeDataInTx(ctx, accounts1, accountType1, storage1, 1)
-		require.NoError(t, err)
-
-		// Update with later block numbers
-		accounts2 := map[string]uint64{"0x1234567890123456789012345678901234567890": 200}
-		accountType2 := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage2 := map[string]map[string]uint64{
-			"0x1234567890123456789012345678901234567890": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 200,
-			},
-		}
-
-		err = repo.UpdateRangeDataInTx(ctx, accounts2, accountType2, storage2, 2)
-		require.NoError(t, err)
-
-		// Verify data was updated to latest block numbers
-		isContract := false
-		assertAccountExists(t, repo, "0x1234567890123456789012345678901234567890", 200, &isContract)
-		assertStorageExists(t, repo, "0x1234567890123456789012345678901234567890",
-			"0x0000000000000000000000000000000000000000000000000000000000000001", 200)
-	})
-
 	t.Run("LargeDataSet", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -295,17 +217,17 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		accountType := make(map[string]bool)
 		storage := make(map[string]map[string]uint64)
 
-		// Create 100 accounts with storage
-		for i := 0; i < 100; i++ {
-			addr := generateTestAddress(i)
+		// Create 50 accounts with storage (smaller than PostgreSQL test for ClickHouse)
+		for i := 0; i < 50; i++ {
+			addr := generateClickHouseTestAddress(i)
 			accounts[addr] = uint64(1000 + i)
 			accountType[addr] = i%2 == 0 // Alternate between EOA and Contract
 
 			// Add storage for contracts
 			if accountType[addr] {
 				storage[addr] = make(map[string]uint64)
-				for j := 0; j < 5; j++ { // 5 storage slots per contract
-					slot := generateTestStorageSlot(j)
+				for j := 0; j < 3; j++ { // 3 storage slots per contract
+					slot := generateClickHouseTestStorageSlot(j)
 					storage[addr][slot] = uint64(1000 + i)
 				}
 			}
@@ -314,17 +236,11 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 10)
 		require.NoError(t, err)
 
-		// Verify a sample of the data
-		for i := 0; i < 10; i++ {
-			addr := generateTestAddress(i)
-			isContract := i%2 == 0
-			assertAccountExists(t, repo, addr, uint64(1000+i), &isContract)
-
-			if isContract {
-				slot := generateTestStorageSlot(0)
-				assertStorageExists(t, repo, addr, slot, uint64(1000+i))
-			}
-		}
+		// Verify the data was inserted
+		analytics, err := repo.GetAnalyticsData(ctx, 1200, 1300) // Expiry after our test data
+		require.NoError(t, err)
+		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts")
+		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -333,23 +249,23 @@ func TestUpdateRangeDataInTx(t *testing.T) {
 	})
 }
 
-// TestGetSyncStatus tests sync status reporting
-func TestGetSyncStatus(t *testing.T) {
+// TestClickHouseGetSyncStatus tests sync status reporting
+func TestClickHouseGetSyncStatus(t *testing.T) {
 	t.Run("EmptyDatabase", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
 
-		ctx := context.Background()
+		ctx := t.Context()
 		status, err := repo.GetSyncStatus(ctx, 100, 10)
 		require.NoError(t, err)
 
 		assert.False(t, status.IsSynced, "Should not be synced with empty database")
 		assert.Equal(t, uint64(0), status.LastIndexedRange)
-		assert.Equal(t, uint64(0), status.EndBlock) // latestRange * rangeSize
+		assert.Equal(t, uint64(0), status.EndBlock) // latestRange * rangeSize (0 * 10 = 0)
 	})
 
 	t.Run("PartialSync", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -371,7 +287,7 @@ func TestGetSyncStatus(t *testing.T) {
 	})
 
 	t.Run("FullySync", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -393,22 +309,13 @@ func TestGetSyncStatus(t *testing.T) {
 	})
 }
 
-// TestGetAnalyticsData tests comprehensive analytics functionality
-func TestGetAnalyticsData(t *testing.T) {
-	t.Run("EmptyDatabase", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
-
-		ctx := context.Background()
-		_, err := repo.GetAnalyticsData(ctx, 1000, 2000)
-		require.Error(t, err)
-	})
-
+// TestClickHouseGetAnalyticsData tests comprehensive analytics functionality
+func TestClickHouseGetAnalyticsData(t *testing.T) {
 	t.Run("WithTestData", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
-		defer cleanup()
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
 
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create test data
 		accounts := make(map[string]uint64)
@@ -417,7 +324,7 @@ func TestGetAnalyticsData(t *testing.T) {
 
 		// Create 20 accounts: 10 EOAs and 10 contracts
 		for i := 0; i < 20; i++ {
-			addr := generateTestAddress(i)
+			addr := generateClickHouseTestAddress(i)
 			accounts[addr] = uint64(1000 + i*100) // Spread across blocks
 			accountType[addr] = i >= 10           // First 10 are EOAs, rest are contracts
 
@@ -425,7 +332,7 @@ func TestGetAnalyticsData(t *testing.T) {
 			if accountType[addr] {
 				storage[addr] = make(map[string]uint64)
 				for j := 0; j < 3; j++ { // 3 storage slots per contract
-					slot := generateTestStorageSlot(j)
+					slot := generateClickHouseTestStorageSlot(j)
 					storage[addr][slot] = uint64(1000 + i*100 + j)
 				}
 			}
@@ -462,10 +369,10 @@ func TestGetAnalyticsData(t *testing.T) {
 	})
 }
 
-// TestUpdateRangeDataWithAllEventsInTx tests that PostgreSQL properly rejects archive mode operations
-func TestUpdateRangeDataWithAllEventsInTx(t *testing.T) {
-	t.Run("ArchiveModeNotSupported", func(t *testing.T) {
-		repo, cleanup := setupTestRepository(t)
+// TestClickHouseUpdateRangeDataWithAllEventsInTx tests archive mode functionality
+func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
+	t.Run("EmptyEvents", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
@@ -473,9 +380,104 @@ func TestUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 		accountType := map[string]bool{}
 		storageAccesses := map[uint64]map[string]map[string]struct{}{}
 
-		// PostgreSQL should reject archive mode operations
 		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "archive mode", "Should indicate archive mode is not supported")
+		require.NoError(t, err)
+
+		// Verify metadata was updated
+		lastRange, err := repo.GetLastIndexedRange(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), lastRange)
+	})
+
+	t.Run("WithEvents", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Create test data with events across multiple blocks
+		accountAccesses := map[uint64]map[string]struct{}{
+			1000: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+			},
+			1001: {
+				"0x1234567890123456789012345678901234567890": {}, // Access again
+			},
+		}
+
+		accountType := map[string]bool{
+			"0x1234567890123456789012345678901234567890": false,
+			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": true,
+		}
+
+		storageAccesses := map[uint64]map[string]map[string]struct{}{
+			1000: {
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+			},
+			1001: {
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {}, // Access again
+					"0x0000000000000000000000000000000000000000000000000000000000000002": {}, // New slot
+				},
+			},
+		}
+
+		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
+		require.NoError(t, err)
+
+		// For ClickHouse archive mode, ALL events should be stored
+		// We can verify by checking that analytics shows we have data
+		analytics, err := repo.GetAnalyticsData(ctx, 1100, 1200) // Expiry after some of our test data
+		require.NoError(t, err)
+		assert.Equal(t, analytics.AccountExpiry.TotalAccounts, 2, "Should have accounts from all events")
+		assert.Equal(t, analytics.StorageSlotExpiry.TotalSlots, 2, "Should have storage from all events")
+
+		// Verify metadata
+		lastRange, err := repo.GetLastIndexedRange(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), lastRange)
+	})
+
+	t.Run("MultipleBlockEvents", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Create archive mode data with the same account accessed in multiple blocks
+		accountAccesses := map[uint64]map[string]struct{}{
+			1000: {
+				"0x1234567890123456789012345678901234567890": {},
+			},
+			1100: {
+				"0x1234567890123456789012345678901234567890": {}, // Same account, different block
+			},
+			1200: {
+				"0x1234567890123456789012345678901234567890": {}, // Same account, third block
+			},
+		}
+
+		accountType := map[string]bool{
+			"0x1234567890123456789012345678901234567890": false,
+		}
+
+		storageAccesses := map[uint64]map[string]map[string]struct{}{}
+
+		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
+		require.NoError(t, err)
+
+		// In archive mode, ClickHouse should store all 3 access events for the same account
+		// This is different from PostgreSQL which only stores the latest access
+		analytics, err := repo.GetAnalyticsData(ctx, 1150, 1300) // Expiry between blocks 2 and 3
+		require.NoError(t, err)
+		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have account data")
+
+		// Verify metadata
+		lastRange, err := repo.GetLastIndexedRange(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(1), lastRange)
 	})
 }

@@ -3,6 +3,7 @@ package testdb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stretchr/testify/require"
 	"github.com/weiihann/state-expiry-indexer/internal"
-	"github.com/weiihann/state-expiry-indexer/internal/repository"
 
 	// Database drivers
 	_ "github.com/ClickHouse/clickhouse-go/v2"
@@ -54,8 +54,8 @@ func GetTestConfig() TestConfig {
 	}
 }
 
-// SetupTestDatabase sets up a test database with migrations and returns a repository and cleanup function
-func SetupTestDatabase(t *testing.T, archiveMode bool) (repository.StateRepositoryInterface, func()) {
+// SetupTestDatabase sets up a test database with migrations and returns a cleanup function
+func SetupTestDatabase(t *testing.T, archiveMode bool) func() {
 	t.Helper()
 
 	testConfig := GetTestConfig()
@@ -67,7 +67,7 @@ func SetupTestDatabase(t *testing.T, archiveMode bool) (repository.StateReposito
 }
 
 // setupPostgreSQLTestDB sets up a PostgreSQL test database
-func setupPostgreSQLTestDB(t *testing.T, dbConfig TestDBConfig) (repository.StateRepositoryInterface, func()) {
+func setupPostgreSQLTestDB(t *testing.T, dbConfig TestDBConfig) func() {
 	t.Helper()
 
 	// Create test configuration
@@ -86,7 +86,7 @@ func setupPostgreSQLTestDB(t *testing.T, dbConfig TestDBConfig) (repository.Stat
 	}
 
 	// Wait for database to be ready
-	waitForPostgreSQL(t, config, 30*time.Second)
+	WaitForPostgreSQL(t, config, 30*time.Second)
 
 	// Create SQL connection for migrations
 	sqlDB, err := sql.Open("postgres", config.GetDatabaseConnectionString())
@@ -115,21 +115,16 @@ func setupPostgreSQLTestDB(t *testing.T, dbConfig TestDBConfig) (repository.Stat
 	err = sqlDB.Close()
 	require.NoError(t, err, "failed to close SQL connection")
 
-	// Create repository
-	ctx := context.Background()
-	repo, err := repository.NewRepository(ctx, config)
-	require.NoError(t, err, "failed to create repository")
-
 	// Return cleanup function
 	cleanup := func() {
 		cleanupPostgreSQLTestDB(t, config)
 	}
 
-	return repo, cleanup
+	return cleanup
 }
 
 // setupClickHouseTestDB sets up a ClickHouse test database
-func setupClickHouseTestDB(t *testing.T, dbConfig TestDBConfig) (repository.StateRepositoryInterface, func()) {
+func setupClickHouseTestDB(t *testing.T, dbConfig TestDBConfig) func() {
 	t.Helper()
 
 	// Create test configuration
@@ -148,7 +143,7 @@ func setupClickHouseTestDB(t *testing.T, dbConfig TestDBConfig) (repository.Stat
 	}
 
 	// Wait for database to be ready
-	waitForClickHouse(t, config, 30*time.Second)
+	WaitForClickHouse(t, config, 30*time.Second)
 
 	// Get ClickHouse connection string
 	connectionString := config.GetClickHouseConnectionString(true)
@@ -178,21 +173,16 @@ func setupClickHouseTestDB(t *testing.T, dbConfig TestDBConfig) (repository.Stat
 	require.NoError(t, sourceErr, "failed to close migration source")
 	require.NoError(t, dbErr, "failed to close migration database")
 
-	// Create repository
-	ctx := context.Background()
-	repo, err := repository.NewRepository(ctx, config)
-	require.NoError(t, err, "failed to create repository")
-
 	// Return cleanup function
 	cleanup := func() {
 		cleanupClickHouseTestDB(t, config)
 	}
 
-	return repo, cleanup
+	return cleanup
 }
 
 // waitForPostgreSQL waits for PostgreSQL to be ready
-func waitForPostgreSQL(t *testing.T, config internal.Config, timeout time.Duration) {
+func WaitForPostgreSQL(t *testing.T, config internal.Config, timeout time.Duration) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -220,7 +210,7 @@ func waitForPostgreSQL(t *testing.T, config internal.Config, timeout time.Durati
 }
 
 // waitForClickHouse waits for ClickHouse to be ready
-func waitForClickHouse(t *testing.T, config internal.Config, timeout time.Duration) {
+func WaitForClickHouse(t *testing.T, config internal.Config, timeout time.Duration) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -284,32 +274,27 @@ func cleanupClickHouseTestDB(t *testing.T, config internal.Config) {
 	}
 	defer db.Close()
 
-	// Drop all tables to clean up
-	_, err = db.Exec(`
-		DROP TABLE IF EXISTS accounts_archive;
-	`)
+	rows, err := db.Query(`
+    SELECT database, name 
+    FROM system.tables 
+    WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+`)
 	if err != nil {
-		t.Logf("failed to cleanup ClickHouse test database: %v", err)
+		t.Logf("failed to list ClickHouse tables: %v", err)
+		return
 	}
+	defer rows.Close()
 
-	_, err = db.Exec(`
-		DROP TABLE IF EXISTS storage_archive;
-	`)
-	if err != nil {
-		t.Logf("failed to cleanup ClickHouse test database: %v", err)
+	for rows.Next() {
+		var dbName, tableName string
+		if err := rows.Scan(&dbName, &tableName); err != nil {
+			t.Logf("failed to scan table info: %v", err)
+			continue
+		}
+
+		stmt := fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", dbName, tableName)
+		if _, err := db.Exec(stmt); err != nil {
+			t.Logf("failed to drop table %s.%s: %v", dbName, tableName, err)
+		}
 	}
-
-	_, err = db.Exec(`
-	DROP TABLE IF EXISTS metadata_archive;
-	`)
-	if err != nil {
-		t.Logf("failed to cleanup ClickHouse test database: %v", err)
-	}
-}
-
-// MustSetupTestDatabase is a convenience function that calls SetupTestDatabase and fails the test on error
-func MustSetupTestDatabase(t *testing.T, archiveMode bool) (repository.StateRepositoryInterface, func()) {
-	t.Helper()
-	repo, cleanup := SetupTestDatabase(t, archiveMode)
-	return repo, cleanup
 }
