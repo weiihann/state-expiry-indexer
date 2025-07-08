@@ -25,9 +25,9 @@ services:
           "CMD",
           "pg_isready",
           "-d",
-          "explorer",
+          "test",
           "-U",
-          "explorer",
+          "test",
         ]
       interval: 30s
       timeout: 30s
