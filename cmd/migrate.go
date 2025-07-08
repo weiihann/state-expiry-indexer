@@ -12,8 +12,8 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
+	"github.com/weiihann/state-expiry-indexer/db"
 	"github.com/weiihann/state-expiry-indexer/internal"
-	"github.com/weiihann/state-expiry-indexer/internal/database"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 )
 
@@ -372,7 +372,7 @@ func setupMigrate() *migrate.Migrate {
 	}
 
 	// Create database connection
-	db, err := database.ConnectSQL(config)
+	db, err := db.ConnectSQL(config)
 	if err != nil {
 		log.Error("Could not connect to database", "error", err)
 		os.Exit(1)
@@ -459,7 +459,7 @@ func RunMigrationsUp(config internal.Config) error {
 	}
 
 	// Create database connection
-	db, err := database.ConnectSQL(config)
+	db, err := db.ConnectSQL(config)
 	if err != nil {
 		return fmt.Errorf("could not connect to database: %w", err)
 	}

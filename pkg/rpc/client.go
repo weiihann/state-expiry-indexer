@@ -8,9 +8,19 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// ClientInterface defines the interface for RPC client operations
+type ClientInterface interface {
+	GetLatestBlockNumber(ctx context.Context) (*big.Int, error)
+	GetCode(ctx context.Context, address string, blockNumber *big.Int) (string, error)
+	GetStateDiff(ctx context.Context, blockNumber *big.Int) ([]TransactionResult, error)
+}
+
 type Client struct {
 	eth *rpc.Client
 }
+
+// Ensure Client implements ClientInterface
+var _ ClientInterface = (*Client)(nil)
 
 func NewClient(ctx context.Context, url string) (*Client, error) {
 	eth, err := rpc.DialContext(ctx, url)
@@ -27,6 +37,21 @@ func (c *Client) GetLatestBlockNumber(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	return (*big.Int)(&result), nil
+}
+
+// GetCode returns the contract code at the given address and block number
+func (c *Client) GetCode(ctx context.Context, address string, blockNumber *big.Int) (string, error) {
+	var result string
+	blockParam := "latest"
+	if blockNumber != nil {
+		blockParam = hexutil.EncodeBig(blockNumber)
+	}
+
+	err := c.eth.CallContext(ctx, &result, "eth_getCode", address, blockParam)
+	if err != nil {
+		return "", err
+	}
+	return result, nil
 }
 
 // DiffItem represents a single change in the state diff
