@@ -63,6 +63,28 @@ services:
       retries: 3
     restart: unless-stopped
 
+  test-clickhouse:
+    image: clickhouse/clickhouse-server:25.6
+    container_name: state-expiry-test-clickhouse
+    environment:
+      CLICKHOUSE_DB: test_state_expiry
+      CLICKHOUSE_USER: test_user
+      CLICKHOUSE_PASSWORD: test_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "127.0.0.1:18123:8123"  # HTTP interface
+      - "127.0.0.1:19010:9000"  # Native TCP interface (for migrations)
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: on-failure
+    stdin_open: true
+    tty: true
+    tmpfs:
+      - /var/lib/clickhouse
+
 volumes:
   postgres_data: 
   clickhouse_data: 
