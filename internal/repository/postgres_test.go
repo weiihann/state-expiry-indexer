@@ -5,120 +5,32 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/weiihann/state-expiry-indexer/db"
-	"github.com/weiihann/state-expiry-indexer/internal"
+	"github.com/weiihann/state-expiry-indexer/internal/testdb"
 )
 
-// Test helper functions to avoid import cycle with testdb
-
-// generateTestAddress creates a test Ethereum address
-func generateTestAddress(index int) string {
-	return fmt.Sprintf("0x%040x", index)
-}
+// Test helper functions - using shared config to maintain consistency with testdb
 
 // generateTestStorageSlot creates a test storage slot key
 func generateTestStorageSlot(index int) string {
 	return fmt.Sprintf("0x%064x", index)
 }
 
-// runTestMigrations runs database migrations for tests
-func runTestMigrations(config internal.Config, migrationPath string) error {
-	// Create database connection
-	database, err := db.ConnectSQL(config)
-	if err != nil {
-		return fmt.Errorf("could not connect to database: %w", err)
-	}
-	defer database.Close()
-
-	// Create postgres driver instance
-	driver, err := postgres.WithInstance(database, &postgres.Config{})
-	if err != nil {
-		return fmt.Errorf("could not create postgres driver: %w", err)
-	}
-
-	// Create migrate instance
-	m, err := migrate.NewWithDatabaseInstance(
-		"file://"+migrationPath,
-		"postgres", driver)
-	if err != nil {
-		return fmt.Errorf("could not create migrate instance: %w", err)
-	}
-	defer m.Close()
-
-	// Apply all pending migrations
-	if err := m.Up(); err != nil {
-		if err == migrate.ErrNoChange {
-			// No migrations to apply - this is fine
-			return nil
-		}
-		return fmt.Errorf("migration failed: %w", err)
-	}
-
-	return nil
-}
-
 // setupTestRepository creates a test repository with clean database
 func setupTestRepository(t *testing.T) (StateRepositoryInterface, func()) {
 	t.Helper()
 
-	// Use test configuration
-	config := internal.Config{
-		DBHost:      "localhost",
-		DBPort:      "15432",
-		DBUser:      "test",
-		DBPassword:  "test",
-		DBName:      "test",
-		DBMaxConns:  5,
-		DBMinConns:  1,
-		Environment: "test",
-		ArchiveMode: false,
-		RPCURLS:     []string{"http://localhost:8545"}, // Required for validation
-	}
+	cleanUp := testdb.SetupTestDatabase(t, false)
 
-	// Run migrations first
-	migrationPath := "../../db/migrations"
-
-	// Skip tests if migration fails (database not available)
-	if err := runTestMigrations(config, migrationPath); err != nil {
-		t.Skipf("Test database not available or migrations failed: %v", err)
-		return nil, func() {}
-	}
-
-	// Create repository
-	ctx := context.Background()
-	repo, err := NewRepository(ctx, config)
+	// Use standard test configuration
+	config := getTestDBConfig()
+	repo, err := NewRepository(t.Context(), config)
 	if err != nil {
-		t.Skipf("Failed to create repository after migrations: %v", err)
 		return nil, func() {}
 	}
 
-	// Cleanup function
-	cleanup := func() {
-		// Clean up test data by dropping and recreating tables
-		if pgRepo, ok := repo.(*PostgreSQLRepository); ok {
-			ctx := context.Background()
-			// Simple cleanup - just clean the metadata to isolate tests
-			_, err := pgRepo.db.Exec(ctx, "DELETE FROM metadata")
-			if err != nil {
-				t.Logf("Warning: Failed to clean metadata table: %v", err)
-			}
-			_, err = pgRepo.db.Exec(ctx, "DELETE FROM accounts_current")
-			if err != nil {
-				t.Logf("Warning: Failed to clean accounts_current table: %v", err)
-			}
-			_, err = pgRepo.db.Exec(ctx, "DELETE FROM storage_current")
-			if err != nil {
-				t.Logf("Warning: Failed to clean storage_current table: %v", err)
-			}
-		}
-	}
-
-	return repo, cleanup
+	return repo, cleanUp
 }
 
 // assertAccountExists verifies that an account exists with expected values

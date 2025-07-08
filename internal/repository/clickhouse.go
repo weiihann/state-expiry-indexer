@@ -25,9 +25,18 @@ func NewClickHouseRepository(db *sql.DB) *ClickHouseRepository {
 func (r *ClickHouseRepository) GetLastIndexedRange(ctx context.Context) (uint64, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Error("Could not begin transaction", "error", err)
+		return 0, fmt.Errorf("could not begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	var value string
-	query := "SELECT value FROM metadata_archive WHERE key = 'last_indexed_range'"
-	err := r.db.QueryRowContext(ctx, query).Scan(&value)
+	// Use argMax to get the most recent value based on updated_at timestamp
+	// This ensures we get the latest value even before background merges occur
+	query := "SELECT argMax(value, updated_at) FROM metadata_archive WHERE key = 'last_indexed_range'"
+	err = tx.QueryRowContext(ctx, query).Scan(&value)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// This can happen if the metadata table is empty. Assume we start from 0.
@@ -265,14 +274,15 @@ func (r *ClickHouseRepository) GetSyncStatus(ctx context.Context, latestRange ui
 		return nil, fmt.Errorf("could not get last indexed range: %w", err)
 	}
 
-	isSynced := lastIndexedRange >= latestRange
-	endBlock := (lastIndexedRange + 1) * rangeSize
-
-	syncStatus := &SyncStatus{
-		IsSynced:         isSynced,
-		LastIndexedRange: lastIndexedRange,
-		EndBlock:         endBlock,
+	// Calculate the end block of the last indexed range
+	var endBlock uint64
+	if lastIndexedRange == 0 {
+		endBlock = 0 // Genesis range
+	} else {
+		endBlock = lastIndexedRange * rangeSize
 	}
+
+	isSynced := lastIndexedRange >= latestRange
 
 	log.Debug("Retrieved sync status",
 		"is_synced", isSynced,
@@ -280,7 +290,11 @@ func (r *ClickHouseRepository) GetSyncStatus(ctx context.Context, latestRange ui
 		"latest_range", latestRange,
 		"end_block", endBlock)
 
-	return syncStatus, nil
+	return &SyncStatus{
+		IsSynced:         isSynced,
+		LastIndexedRange: lastIndexedRange,
+		EndBlock:         endBlock,
+	}, nil
 }
 
 func (r *ClickHouseRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error) {

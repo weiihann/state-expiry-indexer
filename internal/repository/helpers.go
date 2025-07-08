@@ -1,4 +1,4 @@
-package testdb
+package repository
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/weiihann/state-expiry-indexer/internal"
-	"github.com/weiihann/state-expiry-indexer/internal/repository"
+	"github.com/weiihann/state-expiry-indexer/internal/testdb"
 )
 
 // TestData represents common test data structures
@@ -49,7 +49,7 @@ func CreateTestData() TestData {
 }
 
 // LoadTestData loads test data into the repository
-func LoadTestData(t *testing.T, repo repository.StateRepositoryInterface, data TestData) {
+func LoadTestData(t *testing.T, repo StateRepositoryInterface, data TestData) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -79,13 +79,13 @@ func LoadTestData(t *testing.T, repo repository.StateRepositoryInterface, data T
 }
 
 // AssertAccountExists verifies that an account exists with expected values
-func AssertAccountExists(t *testing.T, repo repository.StateRepositoryInterface, address string, expectedBlock uint64, expectedIsContract *bool) {
+func AssertAccountExists(t *testing.T, repo StateRepositoryInterface, address string, expectedBlock uint64, expectedIsContract *bool) {
 	t.Helper()
 
 	ctx := context.Background()
 
 	// Cast to PostgreSQL repository to access GetAccountInfo method
-	pgRepo, ok := repo.(*repository.PostgreSQLRepository)
+	pgRepo, ok := repo.(*PostgreSQLRepository)
 	if !ok {
 		// For ClickHouse, we'll need to implement this differently
 		t.Skip("AssertAccountExists not yet implemented for ClickHouse repository")
@@ -107,13 +107,13 @@ func AssertAccountExists(t *testing.T, repo repository.StateRepositoryInterface,
 }
 
 // AssertStorageExists verifies that a storage slot exists with expected values
-func AssertStorageExists(t *testing.T, repo repository.StateRepositoryInterface, address, slot string, expectedBlock uint64) {
+func AssertStorageExists(t *testing.T, repo StateRepositoryInterface, address, slot string, expectedBlock uint64) {
 	t.Helper()
 
 	ctx := context.Background()
 
 	// Cast to PostgreSQL repository to access GetStateLastAccessedBlock method
-	pgRepo, ok := repo.(*repository.PostgreSQLRepository)
+	pgRepo, ok := repo.(*PostgreSQLRepository)
 	if !ok {
 		// For ClickHouse, we'll need to implement this differently
 		t.Skip("AssertStorageExists not yet implemented for ClickHouse repository")
@@ -127,7 +127,7 @@ func AssertStorageExists(t *testing.T, repo repository.StateRepositoryInterface,
 }
 
 // AssertAccountCount verifies the total number of accounts
-func AssertAccountCount(t *testing.T, repo repository.StateRepositoryInterface, expiryBlock uint64, expectedEOA, expectedContract int) {
+func AssertAccountCount(t *testing.T, repo StateRepositoryInterface, expiryBlock uint64, expectedEOA, expectedContract int) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -212,21 +212,21 @@ func SkipIfShort(t *testing.T) {
 func RequireTestDatabase(t *testing.T, archiveMode bool) {
 	t.Helper()
 
-	testConfig := GetTestConfig()
+	testConfig := testdb.GetTestConfig()
 
 	if archiveMode {
 		// Check ClickHouse availability
 		config := createTestConfig(testConfig.ClickHouse, true)
-		waitForClickHouse(t, config, 5*time.Second)
+		testdb.WaitForClickHouse(t, config, 5*time.Second)
 	} else {
 		// Check PostgreSQL availability
 		config := createTestConfig(testConfig.PostgreSQL, false)
-		waitForPostgreSQL(t, config, 5*time.Second)
+		testdb.WaitForPostgreSQL(t, config, 5*time.Second)
 	}
 }
 
 // createTestConfig creates an internal.Config for testing
-func createTestConfig(dbConfig TestDBConfig, archiveMode bool) internal.Config {
+func createTestConfig(dbConfig testdb.TestDBConfig, archiveMode bool) internal.Config {
 	if archiveMode {
 		return internal.Config{
 			ClickHouseHost:     dbConfig.Host,
