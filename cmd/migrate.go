@@ -407,7 +407,7 @@ func setupClickHouseMigrate() *migrate.Migrate {
 	}
 
 	// Get ClickHouse connection string
-	connectionString := config.GetClickHouseConnectionString()
+	connectionString := config.GetClickHouseConnectionString(true)
 	p := &clickhouse.ClickHouse{}
 	d, err := p.Open(connectionString)
 	if err != nil {
@@ -499,7 +499,7 @@ func RunClickHouseMigrationsUp(config internal.Config) error {
 	log := logger.GetLogger("migrate-ch-auto")
 
 	// Get ClickHouse connection string
-	connectionString := config.GetClickHouseConnectionString()
+	connectionString := config.GetClickHouseConnectionString(true)
 
 	// Create migrate instance with ClickHouse
 	m, err := migrate.New(

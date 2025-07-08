@@ -133,7 +133,7 @@ func setDefaults() {
 	// ClickHouse defaults
 	viper.SetDefault("ARCHIVE_MODE", false)
 	viper.SetDefault("CLICKHOUSE_HOST", "localhost")
-	viper.SetDefault("CLICKHOUSE_PORT", "8123")
+	viper.SetDefault("CLICKHOUSE_PORT", "9010")
 	viper.SetDefault("CLICKHOUSE_USER", "user")
 	viper.SetDefault("CLICKHOUSE_PASSWORD", "password")
 	viper.SetDefault("CLICKHOUSE_DATABASE", "state_expiry")
@@ -430,9 +430,18 @@ func (c *Config) GetDatabaseConnectionString() string {
 }
 
 // GetClickHouseConnectionString builds a ClickHouse connection string for golang-migrate
-func (c *Config) GetClickHouseConnectionString() string {
+func (c *Config) GetClickHouseConnectionString(migrate bool) string {
 	// golang-migrate ClickHouse driver expects clickhouse:// protocol for native TCP connection
-	// secure=false is needed for non-TLS connections to work properly
+	if migrate {
+		return fmt.Sprintf(
+			"clickhouse://%s:%s@%s:%s/%s?secure=false&x-multi-statement=true",
+			c.ClickHouseUser,
+			c.ClickHousePassword,
+			c.ClickHouseHost,
+			c.ClickHousePort,
+			c.ClickHouseDatabase,
+		)
+	}
 	return fmt.Sprintf(
 		"clickhouse://%s:%s@%s:%s/%s?secure=false",
 		c.ClickHouseUser,

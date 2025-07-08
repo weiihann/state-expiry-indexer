@@ -120,7 +120,7 @@ func ConnectClickHouse(ctx context.Context, config internal.Config) (clickhouse.
 // ConnectClickHouseSQL creates a standard database/sql ClickHouse connection for golang-migrate
 func ConnectClickHouseSQL(config internal.Config) (*sql.DB, error) {
 	log := logger.GetLogger("clickhouse-migration")
-	connStr := config.GetClickHouseConnectionString()
+	connStr := config.GetClickHouseConnectionString(false)
 
 	// Open ClickHouse connection using database/sql interface
 	db, err := sql.Open("clickhouse", connStr)
