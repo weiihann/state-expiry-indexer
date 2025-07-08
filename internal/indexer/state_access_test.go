@@ -664,26 +664,3 @@ func setupTestRepository(t *testing.T, archiveMode bool) (repository.StateReposi
 
 	return repo, cleanup
 }
-
-// isClickHouseAvailable checks if ClickHouse database is available
-func isClickHouseAvailable(t *testing.T) bool {
-	t.Helper()
-
-	testConfig := testdb.GetTestConfig()
-	config := internal.Config{
-		ClickHouseHost:     testConfig.ClickHouse.Host,
-		ClickHousePort:     testConfig.ClickHouse.Port,
-		ClickHouseUser:     testConfig.ClickHouse.User,
-		ClickHousePassword: testConfig.ClickHouse.Password,
-		ClickHouseDatabase: testConfig.ClickHouse.Database,
-		ClickHouseMaxConns: 10,
-		ClickHouseMinConns: 2,
-		RPCURLS:            []string{"http://localhost:8545"},
-		Environment:        "test",
-		ArchiveMode:        true,
-	}
-
-	ctx := context.Background()
-	_, err := repository.NewRepository(ctx, config)
-	return err == nil
-}
