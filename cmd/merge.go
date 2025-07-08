@@ -23,12 +23,13 @@ var (
 	mergeRangeSize  uint64
 	mergeDryRun     bool
 	mergeNoCleanup  bool
+	mergeRPC        bool
 )
 
 // RangeDiffs represents a block range with its state diffs
 type RangeDiffs struct {
-	BlockNum uint64                   `json:"blockNum"`
-	Diffs    []*rpc.TransactionResult `json:"diffs"`
+	BlockNum uint64                  `json:"blockNum"`
+	Diffs    []rpc.TransactionResult `json:"diffs"`
 }
 
 var mergeCmd = &cobra.Command{
@@ -225,9 +226,19 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 		}
 
 		// Get block data
-		blockData, cleanupBlocks, err := getBlockData(log, config, rpcClient, decoder, ctx, blockNum)
-		if err != nil {
-			return fmt.Errorf("failed to get block data for block %d: %w", blockNum, err)
+		var blockData []rpc.TransactionResult
+		var cleanupBlocks []uint64
+		var err error
+		if mergeRPC {
+			blockData, err = getBlockDataFromRPC(log, rpcClient, ctx, blockNum)
+			if err != nil {
+				return fmt.Errorf("failed to get block data for block %d: %w", blockNum, err)
+			}
+		} else {
+			blockData, cleanupBlocks, err = getBlockData(log, config, rpcClient, decoder, ctx, blockNum)
+			if err != nil {
+				return fmt.Errorf("failed to get block data for block %d: %w", blockNum, err)
+			}
 		}
 
 		// Add block data to range
@@ -302,7 +313,7 @@ func processBlockRange(log *slog.Logger, config internal.Config, rpcClient *rpc.
 	return nil
 }
 
-func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Client, decoder *utils.ZstdDecoder, ctx context.Context, blockNum uint64) ([]*rpc.TransactionResult, []uint64, error) {
+func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Client, decoder *utils.ZstdDecoder, ctx context.Context, blockNum uint64) ([]rpc.TransactionResult, []uint64, error) {
 	var filesToClean []uint64
 
 	// Check for uncompressed JSON file first
@@ -321,7 +332,7 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 				log.Warn("Failed to read JSON file, proceeding to RPC", "block", blockNum, "file", jsonFilename, "error", err)
 			} else {
 				// Additional sanity check: ensure the data is valid JSON
-				var transactionResults []*rpc.TransactionResult
+				var transactionResults []rpc.TransactionResult
 				if err := json.Unmarshal(data, &transactionResults); err != nil {
 					log.Warn("Failed to unmarshal JSON data, treating as corrupted and proceeding to RPC", "block", blockNum, "file", jsonFilename, "error", err)
 				} else {
@@ -353,7 +364,7 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 					log.Warn("Failed to decompress file, treating as corrupted and proceeding to RPC", "block", blockNum, "file", compressedFilename, "error", err)
 				} else {
 					// Additional sanity check: ensure the decompressed data is valid JSON
-					var transactionResults []*rpc.TransactionResult
+					var transactionResults []rpc.TransactionResult
 					if err := json.Unmarshal(decompressedData, &transactionResults); err != nil {
 						log.Warn("Failed to unmarshal decompressed data, treating as corrupted and proceeding to RPC", "block", blockNum, "file", compressedFilename, "error", err)
 					} else {
@@ -373,20 +384,23 @@ func getBlockData(log *slog.Logger, config internal.Config, rpcClient *rpc.Clien
 
 	log.Debug("Downloading block via RPC", "block", blockNum, "reason", "missing_or_corrupted_files")
 
-	blockBigInt := big.NewInt(int64(blockNum))
-	stateDiff, err := rpcClient.GetStateDiff(ctx, blockBigInt)
+	stateDiff, err := getBlockDataFromRPC(log, rpcClient, ctx, blockNum)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to download block %d via RPC: %w", blockNum, err)
 	}
 
-	// Convert to the expected format
-	var transactionResults []*rpc.TransactionResult
-	for i := range stateDiff {
-		transactionResults = append(transactionResults, &stateDiff[i])
+	return stateDiff, filesToClean, nil
+}
+
+func getBlockDataFromRPC(log *slog.Logger, rpcClient *rpc.Client, ctx context.Context, blockNum uint64) ([]rpc.TransactionResult, error) {
+	blockBigInt := big.NewInt(int64(blockNum))
+	stateDiff, err := rpcClient.GetStateDiff(ctx, blockBigInt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download block %d via RPC: %w", blockNum, err)
 	}
 
-	log.Debug("Successfully downloaded block via RPC", "block", blockNum, "transactions", len(transactionResults))
-	return transactionResults, filesToClean, nil
+	log.Debug("Successfully downloaded block via RPC", "block", blockNum, "transactions", len(stateDiff))
+	return stateDiff, nil
 }
 
 func init() {
@@ -395,6 +409,7 @@ func init() {
 	mergeCmd.Flags().Uint64Var(&mergeRangeSize, "range-size", 1000, "Number of blocks per merged range file")
 	mergeCmd.Flags().BoolVar(&mergeDryRun, "dry-run", false, "Preview merge without actually doing it")
 	mergeCmd.Flags().BoolVar(&mergeNoCleanup, "no-cleanup", false, "Keep individual files after merge")
+	mergeCmd.Flags().BoolVar(&mergeRPC, "rpc", false, "Download blocks via RPC and skip file check")
 
 	rootCmd.AddCommand(mergeCmd)
 }
