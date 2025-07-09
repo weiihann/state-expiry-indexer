@@ -1,3 +1,5 @@
+-- Revised ClickHouse Schema for Optimized Queries
+
 -- ClickHouse Archive Schema: Complete State Access History
 -- This schema stores ALL state access events, not just the latest access
 
@@ -44,27 +46,159 @@ ALTER TABLE storage_archive ADD INDEX idx_address address TYPE bloom_filter GRAN
 -- Index for storage slot queries
 ALTER TABLE storage_archive ADD INDEX idx_slot_key slot_key TYPE bloom_filter GRANULARITY 4;
 
--- Analytics Views for Optimized Query Performance
--- These views optimize common analytics patterns
+-- 1. State Tables (current/latest access per address/slot)
 
--- View: Latest Account Access per Address
--- This view finds the most recent access for each account, replicating PostgreSQL "latest" behavior
-CREATE VIEW latest_account_access AS
-SELECT 
+CREATE TABLE accounts_state (
+    address            FixedString(20),
+    is_contract        UInt8,
+    last_access_block  UInt64
+) ENGINE = ReplacingMergeTree(last_access_block)
+ORDER BY (address);
+
+CREATE MATERIALIZED VIEW mv_accounts_state
+TO accounts_state AS
+SELECT
     address,
-    argMax(block_number, block_number) as last_access_block,
-    argMax(is_contract, block_number) as is_contract
+    argMax(is_contract, block_number)   AS is_contract,
+    max(block_number)                   AS last_access_block
 FROM accounts_archive
 GROUP BY address;
 
--- View: Latest Storage Access per Address-Slot
--- This view finds the most recent access for each storage slot, replicating PostgreSQL "latest" behavior  
-CREATE VIEW latest_storage_access AS
-SELECT 
+
+CREATE TABLE storage_state (
+    address            FixedString(20),
+    slot_key           FixedString(32),
+    last_access_block  UInt64
+) ENGINE = ReplacingMergeTree(last_access_block)
+ORDER BY (address, slot_key);
+
+CREATE MATERIALIZED VIEW mv_storage_state
+TO storage_state AS
+SELECT
     address,
     slot_key,
-    argMax(block_number, block_number) as last_access_block
+    max(block_number) AS last_access_block
 FROM storage_archive
 GROUP BY address, slot_key;
 
- 
+
+-- 2. Secondary Indexes on State Tables to Speed Filters
+
+ALTER TABLE accounts_state
+    ADD INDEX idx_acc_last_access   last_access_block TYPE minmax   GRANULARITY 4,
+    ADD INDEX idx_acc_address       address           TYPE bloom_filter GRANULARITY 4;
+
+ALTER TABLE storage_state
+    ADD INDEX idx_st_last_access    last_access_block TYPE minmax   GRANULARITY 4,
+    ADD INDEX idx_st_address        address           TYPE bloom_filter GRANULARITY 4;
+
+
+-- 3. Access-Count Aggregates (for "accessed once" queries)
+
+CREATE TABLE account_access_count_agg (
+    address       FixedString(20),
+    access_count  AggregateFunction(count, UInt64)
+) ENGINE = AggregatingMergeTree()
+ORDER BY (address);
+
+CREATE MATERIALIZED VIEW mv_account_access_count
+TO account_access_count_agg AS
+SELECT
+    address,
+    countState() AS access_count
+FROM accounts_archive
+GROUP BY address;
+
+
+CREATE TABLE storage_access_count_agg (
+    address       FixedString(20),
+    slot_key      FixedString(32),
+    access_count  AggregateFunction(count, UInt64)
+) ENGINE = AggregatingMergeTree()
+ORDER BY (address, slot_key);
+
+CREATE MATERIALIZED VIEW mv_storage_access_count
+TO storage_access_count_agg AS
+SELECT
+    address,
+    slot_key,
+    countState() AS access_count
+FROM storage_archive
+GROUP BY address, slot_key;
+
+
+-- 4. Per-Block Access Summaries (for time-series & "highest blocks")
+
+CREATE TABLE accounts_block_summary (
+    block_number       UInt64,
+    eoa_accesses       UInt64,
+    contract_accesses  UInt64
+) ENGINE = SummingMergeTree()
+ORDER BY (block_number);
+
+CREATE MATERIALIZED VIEW mv_accounts_block_summary
+TO accounts_block_summary AS
+SELECT
+    block_number,
+    sum(if(is_contract = 0, 1, 0)) AS eoa_accesses,
+    sum(if(is_contract = 1, 1, 0)) AS contract_accesses
+FROM accounts_archive
+GROUP BY block_number;
+
+
+CREATE TABLE storage_block_summary (
+    block_number     UInt64,
+    storage_accesses UInt64
+) ENGINE = SummingMergeTree()
+ORDER BY (block_number);
+
+CREATE MATERIALIZED VIEW mv_storage_block_summary
+TO storage_block_summary AS
+SELECT
+    block_number,
+    count() AS storage_accesses
+FROM storage_archive
+GROUP BY block_number;
+
+
+CREATE TABLE combined_block_summary (
+    block_number           UInt64,
+    account_access_count   UInt64,
+    storage_access_count   UInt64
+) ENGINE = SummingMergeTree()
+ORDER BY (block_number);
+
+CREATE MATERIALIZED VIEW mv_combined_block_summary_accounts
+TO combined_block_summary AS
+SELECT
+    block_number,
+    count() AS account_access_count,
+    0      AS storage_access_count
+FROM accounts_archive
+GROUP BY block_number;
+
+CREATE MATERIALIZED VIEW mv_combined_block_summary_storage
+TO combined_block_summary AS
+SELECT
+    block_number,
+    0      AS account_access_count,
+    count() AS storage_access_count
+FROM storage_archive
+GROUP BY block_number;
+
+
+-- 5. Contract-Level Storage Slot Counts (for top-10 & per-contract stats)
+
+CREATE TABLE contract_storage_count_agg (
+    address     FixedString(20),
+    total_slots AggregateFunction(uniq, FixedString(32))
+) ENGINE = AggregatingMergeTree()
+ORDER BY (address);
+
+CREATE MATERIALIZED VIEW mv_contract_storage_count
+TO contract_storage_count_agg AS
+SELECT
+    address,
+    uniqState(slot_key) AS total_slots -- uniqState has some error rate (~1-2%)
+FROM storage_archive
+GROUP BY address;

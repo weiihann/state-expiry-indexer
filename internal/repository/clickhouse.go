@@ -408,14 +408,14 @@ func (r *ClickHouseRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatis
 func (r *ClickHouseRepository) getContractStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ContractStorageAnalysis) error {
 	log := logger.GetLogger("clickhouse-repo")
 
-	// ClickHouse query using latest_storage_access view
+	// ClickHouse query using optimized storage_state table
 	query := `
 		WITH contract_storage_stats AS (
 			SELECT 
 				s.address,
 				countIf(s.last_access_block < ?) as expired_slots,
 				COUNT(*) as total_slots
-			FROM latest_storage_access s
+			FROM storage_state s
 			GROUP BY s.address
 			HAVING countIf(s.last_access_block < ?) > 0
 		)
@@ -471,7 +471,7 @@ func (r *ClickHouseRepository) getContractStorageAnalysis(ctx context.Context, e
 func (r *ClickHouseRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBlock uint64, storageResult *StorageExpiryAnalysis, fullyExpiredResult *FullyExpiredContractsAnalysis) error {
 	log := logger.GetLogger("clickhouse-repo")
 
-	// ClickHouse query for storage expiry percentages per contract
+	// ClickHouse query for storage expiry percentages per contract using optimized storage_state table
 	query := `
 		WITH contract_expiry_stats AS (
 			SELECT 
@@ -479,7 +479,7 @@ func (r *ClickHouseRepository) getStorageExpiryAnalysis(ctx context.Context, exp
 				countIf(last_access_block < ?) as expired_slots,
 				COUNT(*) as total_slots,
 				(countIf(last_access_block < ?) / COUNT(*) * 100) as expiry_percentage
-			FROM latest_storage_access
+			FROM storage_state
 			GROUP BY address
 			HAVING COUNT(*) > 0
 		)
@@ -538,13 +538,13 @@ func (r *ClickHouseRepository) getStorageExpiryAnalysis(ctx context.Context, exp
 func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context, expiryBlock uint64) ([]ExpiryPercentageBucket, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
-	// ClickHouse query for expiry distribution buckets
+	// ClickHouse query for expiry distribution buckets using optimized storage_state table
 	query := `
 		WITH contract_expiry_stats AS (
 			SELECT 
 				address,
 				(countIf(last_access_block < ?) / COUNT(*) * 100) as expiry_percentage
-			FROM latest_storage_access
+			FROM storage_state
 			GROUP BY address
 			HAVING COUNT(*) > 0
 		),
@@ -611,24 +611,24 @@ func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context,
 func (r *ClickHouseRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
 	log := logger.GetLogger("clickhouse-repo")
 
-	// ClickHouse query for complete expiry analysis
+	// ClickHouse query for complete expiry analysis using optimized state tables
 	query := `
 		WITH contract_addresses AS (
 			SELECT DISTINCT address
-			FROM latest_storage_access
+			FROM storage_state
 		),
 		contract_account_expiry AS (
 			SELECT 
 				ca.address,
 				aa.last_access_block < ? as account_expired
 			FROM contract_addresses ca
-			LEFT JOIN latest_account_access aa ON ca.address = aa.address
+			LEFT JOIN accounts_state aa ON ca.address = aa.address
 		),
 		contract_storage_expiry AS (
 			SELECT 
 				address,
 				countIf(last_access_block < ?) = COUNT(*) as all_storage_expired
-			FROM latest_storage_access
+			FROM storage_state
 			GROUP BY address
 		)
 		SELECT 
@@ -663,7 +663,7 @@ func (r *ClickHouseRepository) getCompleteExpiryAnalysis(ctx context.Context, ex
 func (r *ClickHouseRepository) getBaseStatistics(ctx context.Context, expiryBlock uint64) (*BaseStatistics, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
-	// ClickHouse query using latest_account_access and latest_storage_access views
+	// ClickHouse query using optimized accounts_state and storage_state tables
 	query := `
 		WITH account_stats AS (
 			SELECT 
@@ -671,13 +671,13 @@ func (r *ClickHouseRepository) getBaseStatistics(ctx context.Context, expiryBloc
 				countIf(is_contract = 1) as total_contracts,
 				countIf(last_access_block < ? AND is_contract = 0) as expired_eoas,
 				countIf(last_access_block < ? AND is_contract = 1) as expired_contracts
-			FROM latest_account_access
+			FROM accounts_state
 		),
 		storage_stats AS (
 			SELECT 
 				COUNT(*) as total_slots,
 				countIf(last_access_block < ?) as expired_slots
-			FROM latest_storage_access
+			FROM storage_state
 		)
 		SELECT 
 			a.total_eoas,
