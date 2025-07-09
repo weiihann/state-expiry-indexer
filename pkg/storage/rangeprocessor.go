@@ -81,14 +81,18 @@ func (rp *RangeProcessor) GetRangeFilePath(rangeNumber uint64) string {
 	return filepath.Join(rp.dataDir, filename)
 }
 
-// RangeExists checks if a range file exists
+// RangeExists checks if a range file exists and is not empty
 func (rp *RangeProcessor) RangeExists(rangeNumber uint64) bool {
 	if rangeNumber == 0 {
 		return true // Genesis is always considered to exist
 	}
 	filePath := rp.GetRangeFilePath(rangeNumber)
-	_, err := os.Stat(filePath)
-	return err == nil
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return false // File doesn't exist
+	}
+	// Check if file is empty - treat empty files as unavailable
+	return fileInfo.Size() > 0
 }
 
 // DownloadRange downloads all blocks in a range and saves as a compressed range file
