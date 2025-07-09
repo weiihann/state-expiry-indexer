@@ -100,9 +100,10 @@ func (s *stateAccessArchive) AddAccount(addr string, blockNumber uint64, isContr
 		s.accountsByBlock[blockNumber] = make(map[string]struct{})
 	}
 
+	// If the account is not in the map, add it
 	if old, ok := s.accountType[addr]; !ok {
 		s.accountType[addr] = isContract
-	} else if !old {
+	} else if !old { // If it exists, update it if it's a contract
 		s.accountType[addr] = isContract
 	}
 
