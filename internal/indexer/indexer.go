@@ -130,7 +130,7 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64, sa State
 	}
 
 	if sa.Count() > defaultCommitSize || force {
-		i.log.Info("Triggering commit", "range_number", rangeNumber, "account_events", sa.Count())
+		i.log.Info("Triggering commit", "range_number", rangeNumber, "count", sa.Count())
 
 		// Update database with all blocks in the range in a single transaction
 		if err := sa.Commit(ctx, i.repo, rangeNumber); err != nil {
