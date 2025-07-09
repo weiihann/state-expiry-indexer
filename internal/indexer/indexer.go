@@ -195,6 +195,7 @@ func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNu
 	// If the account has code changes, it's definitely a contract
 	if diff.Code != nil {
 		if _, ok := diff.Code.(map[string]any); ok {
+			i.accountType.Add(addr, true)
 			return true
 		}
 	}
@@ -202,19 +203,22 @@ func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNu
 	// If the account has storage changes, it's definitely a contract
 	if diff.Storage != nil {
 		if _, ok := diff.Storage.(map[string]any); ok {
+			i.accountType.Add(addr, true)
 			return true
 		}
 	}
 
-	// Check RPC for code
+	// If both cache misses and diff miss, check via RPC
 	code, err := i.rpcClient.GetCode(ctx, addr, big.NewInt(int64(blockNumber)))
 	if err != nil {
 		return false
 	}
 	if len(code) > 2 { // Omit the 0x prefix
+		i.accountType.Add(addr, true)
 		return true
 	}
 
+	i.accountType.Add(addr, false)
 	return false
 }
 
