@@ -414,7 +414,7 @@ func setupClickHouseMigrate() *migrate.Migrate {
 		log.Error("Could not open ClickHouse connection", "error", err, "connection_string", connectionString)
 		os.Exit(1)
 	}
-	defer d.Close()
+	// Remove defer d.Close() - let the migrate instance manage the connection
 
 	// Create migrate instance with ClickHouse
 	m, err := migrate.NewWithDatabaseInstance(

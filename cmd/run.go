@@ -72,7 +72,11 @@ func run(cmd *cobra.Command, args []string) {
 
 	// Run database migrations
 	log.Info("Checking database migrations...")
-	if err := RunMigrationsUp(config, "db/migrations"); err != nil {
+	migrationPath := "db/migrations"
+	if config.ArchiveMode {
+		migrationPath = "db/ch-migrations"
+	}
+	if err := RunMigrationsUp(config, migrationPath); err != nil {
 		log.Error("Failed to run database migrations", "error", err)
 		os.Exit(1)
 	}
