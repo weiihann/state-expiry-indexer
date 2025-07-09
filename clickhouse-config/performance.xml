@@ -1,0 +1,137 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <!-- Core Performance Configuration for 100GB RAM, 32 CPU Cores -->
+    
+    <!-- Memory Management -->
+    <!-- Allocate 80GB of 100GB available RAM to ClickHouse -->
+    <max_server_memory_usage>85899345920</max_server_memory_usage> <!-- 80GB in bytes -->
+    
+    <!-- Per-query memory limits (10GB per query) -->
+    <max_memory_usage>10737418240</max_memory_usage> <!-- 10GB in bytes -->
+    
+    <!-- Per-user memory limits (40GB per user) -->
+    <max_memory_usage_for_user>80530636800</max_memory_usage_for_user> <!-- 40GB in bytes -->
+    
+    <!-- Memory for all users combined (75GB) -->
+    <max_memory_usage_for_all_queries>80530636800</max_memory_usage_for_all_queries> <!-- 75GB in bytes -->
+    
+    <!-- CPU and Threading Configuration -->
+    <!-- Maximum threads per query (use all 32 cores) -->
+    <max_threads>32</max_threads>
+    
+    <!-- Global thread pool size (2x cores for I/O bound operations) -->
+    <max_thread_pool_size>64</max_thread_pool_size>
+    
+    <!-- Background processing pool size for merges and mutations -->
+    <background_processing_pool_size>32</background_processing_pool_size>
+    
+    <!-- Background pool for fetches and sends -->
+    <background_fetches_pool_size>16</background_fetches_pool_size>
+    
+    <!-- Background pool for distributed sends -->
+    <background_distributed_schedule_pool_size>16</background_distributed_schedule_pool_size>
+    
+    <!-- Background pool for message broker -->
+    <background_message_broker_schedule_pool_size>16</background_message_broker_schedule_pool_size>
+    
+    <!-- Merge and mutation concurrency -->
+    <background_merges_mutations_concurrency_ratio>4</background_merges_mutations_concurrency_ratio>
+    
+    <!-- Query Execution Limits -->
+    <!-- Maximum execution time for analytical queries (5 minutes) -->
+    <max_execution_time>300</max_execution_time>
+    
+    <!-- Maximum concurrent queries (allow high concurrency) -->
+    <max_concurrent_queries>200</max_concurrent_queries>
+    
+    <!-- Maximum concurrent queries for user -->
+    <max_concurrent_queries_for_user>50</max_concurrent_queries_for_user>
+    
+    <!-- Maximum concurrent insert queries -->
+    <max_concurrent_insert_queries>50</max_concurrent_insert_queries>
+    
+    <!-- Query Processing Optimization -->
+    <!-- Block size for query processing (optimized for analytical workload) -->
+    <max_block_size>65536</max_block_size>
+    
+    <!-- Insert block size (optimized for batch inserts) -->
+    <max_insert_block_size>1048576</max_insert_block_size>
+    
+    <!-- Maximum bytes in query result -->
+    <max_result_bytes>107374182400</max_result_bytes> <!-- 100GB -->
+    
+    <!-- Maximum rows in query result -->
+    <max_result_rows>1000000000</max_result_rows> <!-- 1 billion rows -->
+    
+    <!-- Network and I/O -->
+    <!-- Network receive timeout -->
+    <receive_timeout>300</receive_timeout>
+    
+    <!-- Network send timeout -->
+    <send_timeout>300</send_timeout>
+    
+    <!-- TCP keep alive timeout -->
+    <tcp_keep_alive_timeout>300</tcp_keep_alive_timeout>
+    
+    <!-- HTTP receive timeout -->
+    <http_receive_timeout>300</http_receive_timeout>
+    
+    <!-- HTTP send timeout -->
+    <http_send_timeout>300</http_send_timeout>
+    
+    <!-- Cache Configuration -->
+    <!-- Mark cache size (4GB for large datasets) -->
+    <mark_cache_size>4294967296</mark_cache_size>
+    
+    <!-- Uncompressed cache size (8GB for query performance) -->
+    <uncompressed_cache_size>8589934592</uncompressed_cache_size>
+    
+    <!-- Index mark cache size -->
+    <index_mark_cache_size>1073741824</index_mark_cache_size> <!-- 1GB -->
+    
+    <!-- Index uncompressed cache size -->
+    <index_uncompressed_cache_size>2147483648</index_uncompressed_cache_size> <!-- 2GB -->
+    
+    <!-- Compiled expression cache size -->
+    <compiled_expression_cache_size>134217728</compiled_expression_cache_size> <!-- 128MB -->
+    
+    <!-- Query cache size -->
+    <query_cache_size>2147483648</query_cache_size> <!-- 2GB -->
+    
+    <!-- Performance Optimization -->
+    <!-- Enable query profiler -->
+    <query_profiler_real_time_period_ns>1000000000</query_profiler_real_time_period_ns> <!-- 1 second -->
+    <query_profiler_cpu_time_period_ns>1000000000</query_profiler_cpu_time_period_ns> <!-- 1 second -->
+    
+    <!-- Enable memory profiler -->
+    <memory_profiler_step>4194304</memory_profiler_step> <!-- 4MB -->
+    <memory_profiler_sample_probability>0.01</memory_profiler_sample_probability>
+    
+    <!-- Optimize for analytical workload -->
+    <prefer_localhost_replica>1</prefer_localhost_replica>
+    <compile_expressions>1</compile_expressions>
+    <min_count_to_compile_expression>3</min_count_to_compile_expression>
+    
+    <!-- Connection Management -->
+    <!-- Maximum connections -->
+    <max_connections>4096</max_connections>
+    
+    <!-- Keep alive timeout -->
+    <keep_alive_timeout>300</keep_alive_timeout>
+    
+    <!-- Connection pool settings -->
+    <distributed_connections_pool_size>1024</distributed_connections_pool_size>
+    
+    <!-- Async insert settings for high throughput -->
+    <async_insert>1</async_insert>
+    <wait_for_async_insert>1</wait_for_async_insert>
+    <wait_for_async_insert_timeout>10</wait_for_async_insert_timeout>
+    <async_insert_max_data_size>10485760</async_insert_max_data_size> <!-- 10MB -->
+    <async_insert_busy_timeout_ms>200</async_insert_busy_timeout_ms>
+    <async_insert_stale_timeout_ms>0</async_insert_stale_timeout_ms>
+    
+    <!-- Temporary data settings -->
+    <max_temporary_data_on_disk_size>107374182400</max_temporary_data_on_disk_size> <!-- 100GB -->
+    <max_temporary_columns>1000</max_temporary_columns>
+    <max_temporary_non_const_columns>50</max_temporary_non_const_columns>
+</clickhouse>
