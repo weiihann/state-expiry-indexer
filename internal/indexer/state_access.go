@@ -6,10 +6,7 @@ import (
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
 )
 
-var (
-	_ StateAccess = &stateAccessLatest{}
-	_ StateAccess = &stateAccessArchive{}
-)
+var _ StateAccess = &stateAccessArchive{}
 
 type StateAccess interface {
 	AddAccount(addr string, blockNumber uint64, isContract bool) error
@@ -17,66 +14,6 @@ type StateAccess interface {
 	Commit(ctx context.Context, repo repository.StateRepositoryInterface, rangeNumber uint64) error
 	Reset()
 	Count() int
-}
-
-type stateAccessLatest struct {
-	// For deduplication mode (PostgreSQL) - stores latest access only
-	accounts    map[string]uint64
-	accountType map[string]bool
-	storage     map[string]map[string]uint64
-
-	count int
-}
-
-func newStateAccessLatest() *stateAccessLatest {
-	return &stateAccessLatest{
-		accounts:    make(map[string]uint64),
-		accountType: make(map[string]bool),
-		storage:     make(map[string]map[string]uint64),
-	}
-}
-
-func (s *stateAccessLatest) AddAccount(addr string, blockNumber uint64, isContract bool) error {
-	if _, ok := s.accounts[addr]; !ok {
-		s.count++
-	}
-
-	if old, ok := s.accountType[addr]; !ok {
-		s.accountType[addr] = isContract
-	} else if !old {
-		s.accountType[addr] = isContract
-	}
-
-	s.accounts[addr] = blockNumber
-
-	return nil
-}
-
-func (s *stateAccessLatest) AddStorage(addr string, slot string, blockNumber uint64) {
-	if _, ok := s.storage[addr]; !ok {
-		s.storage[addr] = make(map[string]uint64)
-	}
-
-	if _, exists := s.storage[addr][slot]; !exists {
-		s.count++
-	}
-
-	s.storage[addr][slot] = blockNumber
-}
-
-func (s *stateAccessLatest) Commit(ctx context.Context, repo repository.StateRepositoryInterface, rangeNumber uint64) error {
-	return repo.UpdateRangeDataInTx(ctx, s.accounts, s.accountType, s.storage, rangeNumber)
-}
-
-func (s *stateAccessLatest) Reset() {
-	s.accounts = make(map[string]uint64)
-	s.accountType = make(map[string]bool)
-	s.storage = make(map[string]map[string]uint64)
-	s.count = 0
-}
-
-func (s *stateAccessLatest) Count() int {
-	return s.count
 }
 
 type stateAccessArchive struct {
@@ -132,7 +69,7 @@ func (s *stateAccessArchive) AddStorage(addr string, slot string, blockNumber ui
 }
 
 func (s *stateAccessArchive) Commit(ctx context.Context, repo repository.StateRepositoryInterface, rangeNumber uint64) error {
-	return repo.UpdateRangeDataWithAllEventsInTx(ctx, s.accountsByBlock, s.accountType, s.storageByBlock, rangeNumber)
+	return repo.InsertRange(ctx, s.accountsByBlock, s.accountType, s.storageByBlock, rangeNumber)
 }
 
 func (s *stateAccessArchive) Reset() {

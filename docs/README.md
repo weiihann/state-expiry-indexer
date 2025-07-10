@@ -12,7 +12,7 @@ The State Expiry Indexer is a comprehensive system for tracking and analyzing Et
 ### Core Documentation
 
 - **[Archive System Guide](ARCHIVE_SYSTEM.md)** - Comprehensive guide to the ClickHouse archive system
-- **[ClickHouse Schema](../db/ch-migrations/README.md)** - Database schema and optimization documentation
+- **[ClickHouse Schema](../db/migrations/README.md)** - Database schema and optimization documentation
 - **[Configuration Guide](../configs/config.env.example)** - Complete configuration reference
 
 ### Technical Documentation

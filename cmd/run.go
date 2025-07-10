@@ -42,40 +42,18 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Override archive mode if flag is provided
-	if archiveMode {
-		config.ArchiveMode = true
-		log.Info("Archive mode enabled via --archive flag - using ClickHouse for complete state history")
-	}
-
 	log.Info("Configuration loaded successfully",
 		"environment", config.Environment,
-		"archive_mode", config.ArchiveMode,
 		"api_port", config.APIPort,
 		"api_host", config.APIHost,
 		"data_dir", config.DataDir,
 		"block_batch_size", config.BlockBatchSize,
 		"poll_interval", config.PollInterval,
-		"db_max_conns", func() int {
-			if config.ArchiveMode {
-				return config.ClickHouseMaxConns
-			}
-			return config.DBMaxConns
-		}(),
-		"db_min_conns", func() int {
-			if config.ArchiveMode {
-				return config.ClickHouseMinConns
-			}
-			return config.DBMinConns
-		}(),
 	)
 
 	// Run database migrations
 	log.Info("Checking database migrations...")
 	migrationPath := "db/migrations"
-	if config.ArchiveMode {
-		migrationPath = "db/ch-migrations"
-	}
 	if err := RunMigrationsUp(config, migrationPath); err != nil {
 		log.Error("Failed to run database migrations", "error", err)
 		os.Exit(1)
@@ -84,21 +62,13 @@ func run(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 
 	// Initialize repository based on archive mode using factory
-	log.Info("Initializing repository...", "archive_mode", config.ArchiveMode)
 	repo, err := repository.NewRepository(ctx, config)
 	if err != nil {
-		log.Error("Failed to initialize repository", "error", err, "archive_mode", config.ArchiveMode)
+		log.Error("Failed to initialize repository", "error", err)
 		os.Exit(1)
 	}
 
-	log.Info("Repository initialized successfully",
-		"archive_mode", config.ArchiveMode,
-		"database_type", func() string {
-			if config.ArchiveMode {
-				return "ClickHouse"
-			}
-			return "PostgreSQL"
-		}())
+	log.Info("Repository initialized successfully")
 
 	// Initialize RPC clients
 	var clients []*rpc.Client

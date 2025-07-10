@@ -61,49 +61,30 @@ func (m *MockRPCClient) GetStateDiff(ctx context.Context, blockNumber *big.Int) 
 }
 
 // createTestConfig creates a test configuration
-func createTestConfig(archiveMode bool, dataDir string) internal.Config {
+func createTestConfig(dataDir string) internal.Config {
 	testConfig := testdb.GetTestConfig()
 
-	if archiveMode {
-		return internal.Config{
-			ClickHouseHost:     testConfig.ClickHouse.Host,
-			ClickHousePort:     testConfig.ClickHouse.Port,
-			ClickHouseUser:     testConfig.ClickHouse.User,
-			ClickHousePassword: testConfig.ClickHouse.Password,
-			ClickHouseDatabase: testConfig.ClickHouse.Database,
-			ClickHouseMaxConns: 10,
-			ClickHouseMinConns: 2,
-			DataDir:            dataDir,
-			RangeSize:          100,
-			PollInterval:       1,
-			RPCURLS:            []string{"http://localhost:8545"},
-			Environment:        "test",
-			ArchiveMode:        true,
-		}
-	}
-
 	return internal.Config{
-		DBHost:       testConfig.PostgreSQL.Host,
-		DBPort:       testConfig.PostgreSQL.Port,
-		DBUser:       testConfig.PostgreSQL.User,
-		DBPassword:   testConfig.PostgreSQL.Password,
-		DBName:       testConfig.PostgreSQL.Database,
-		DBMaxConns:   10,
-		DBMinConns:   2,
-		DataDir:      dataDir,
-		RangeSize:    100,
-		PollInterval: 1,
-		RPCURLS:      []string{"http://localhost:8545"},
-		Environment:  "test",
-		ArchiveMode:  false,
+		ClickHouseHost:     testConfig.ClickHouse.Host,
+		ClickHousePort:     testConfig.ClickHouse.Port,
+		ClickHouseUser:     testConfig.ClickHouse.User,
+		ClickHousePassword: testConfig.ClickHouse.Password,
+		ClickHouseDatabase: testConfig.ClickHouse.Database,
+		ClickHouseMaxConns: 10,
+		ClickHouseMinConns: 2,
+		DataDir:            dataDir,
+		RangeSize:          100,
+		PollInterval:       1,
+		RPCURLS:            []string{"http://localhost:8545"},
+		Environment:        "test",
 	}
 }
 
 // createTestRepository creates a test repository with database setup
-func createTestRepository(t *testing.T, archiveMode bool, config internal.Config) (repository.StateRepositoryInterface, func()) {
+func createTestRepository(t *testing.T, config internal.Config) (repository.StateRepositoryInterface, func()) {
 	t.Helper()
 
-	cleanup := testdb.SetupTestDatabase(t, archiveMode)
+	cleanup := testdb.SetupTestDatabase(t)
 
 	ctx := context.Background()
 	repo, err := repository.NewRepository(ctx, config)
@@ -193,12 +174,7 @@ func TestIndexerServiceInitialization(t *testing.T) {
 		archiveMode bool
 	}{
 		{
-			name:        "PostgreSQL Service Initialization",
-			archiveMode: false,
-		},
-		{
-			name:        "ClickHouse Service Initialization",
-			archiveMode: true,
+			name: "ClickHouse Service Initialization",
 		},
 	}
 
@@ -208,8 +184,8 @@ func TestIndexerServiceInitialization(t *testing.T) {
 			dataDir, cleanupDir := createTestDataDir(t)
 			defer cleanupDir()
 
-			config := createTestConfig(tt.archiveMode, dataDir)
-			repo, cleanupDB := createTestRepository(t, tt.archiveMode, config)
+			config := createTestConfig(dataDir)
+			repo, cleanupDB := createTestRepository(t, config)
 			defer cleanupDB()
 
 			mockRPC := NewMockRPCClient()
@@ -223,7 +199,6 @@ func TestIndexerServiceInitialization(t *testing.T) {
 			assert.NotNil(t, service.indexer, "Indexer should be initialized")
 			assert.NotNil(t, service.repo, "Repository should be set")
 			assert.NotNil(t, service.rpcClient, "RPC client should be set")
-			assert.Equal(t, config.ArchiveMode, service.config.ArchiveMode, "Archive mode should match config")
 			assert.Equal(t, config.RangeSize, service.config.RangeSize, "Range size should match config")
 
 			// Test service close
@@ -240,8 +215,8 @@ func TestIndexerServiceFailedInitialization(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -259,16 +234,10 @@ func TestIndexerServiceFailedInitialization(t *testing.T) {
 // TestIndexerProcessGenesis tests genesis block processing
 func TestIndexerProcessGenesis(t *testing.T) {
 	tests := []struct {
-		name        string
-		archiveMode bool
+		name string
 	}{
 		{
-			name:        "PostgreSQL Genesis Processing",
-			archiveMode: false,
-		},
-		{
-			name:        "ClickHouse Genesis Processing",
-			archiveMode: true,
+			name: "ClickHouse Genesis Processing",
 		},
 	}
 
@@ -278,8 +247,8 @@ func TestIndexerProcessGenesis(t *testing.T) {
 			dataDir, cleanupDir := createTestDataDir(t)
 			defer cleanupDir()
 
-			config := createTestConfig(tt.archiveMode, dataDir)
-			repo, cleanupDB := createTestRepository(t, tt.archiveMode, config)
+			config := createTestConfig(dataDir)
+			repo, cleanupDB := createTestRepository(t, config)
 			defer cleanupDB()
 
 			mockRPC := NewMockRPCClient()
@@ -308,8 +277,8 @@ func TestIndexerRangeProcessing(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -320,7 +289,7 @@ func TestIndexerRangeProcessing(t *testing.T) {
 		ctx := context.Background()
 
 		// Create appropriate state access
-		sa := newStateAccessLatest()
+		sa := newStateAccessArchive()
 
 		// Test genesis range processing (range 0)
 		err := service.indexer.ProcessRange(ctx, 0, sa, true)
@@ -337,8 +306,8 @@ func TestIndexerRangeProcessing(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(true, dataDir)
-		repo, cleanupDB := createTestRepository(t, true, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -361,8 +330,8 @@ func TestIndexerServiceProcessAvailableRanges(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -389,13 +358,13 @@ func TestIndexerServiceProcessAvailableRanges(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		// Manually set last indexed range to simulate already processed genesis
 		ctx := context.Background()
-		err := repo.UpdateRangeDataInTx(ctx, map[string]uint64{}, map[string]bool{}, map[string]map[string]uint64{}, 0)
+		err := repo.InsertRange(ctx, map[uint64]map[string]struct{}{}, map[string]bool{}, map[uint64]map[string]map[string]struct{}{}, 0)
 		require.NoError(t, err, "Should be able to update range data")
 
 		mockRPC := NewMockRPCClient()
@@ -418,8 +387,8 @@ func TestIndexerServiceErrorHandling(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		// Close database connection to simulate error
@@ -442,8 +411,8 @@ func TestIndexerServiceErrorHandling(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		// Create mock RPC that will fail
@@ -471,8 +440,8 @@ func TestIndexerServiceContextCancellation(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -496,8 +465,8 @@ func TestIndexerServiceContextCancellation(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -528,8 +497,8 @@ func TestIndexerServiceAccountTypeDetection(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()
@@ -567,8 +536,8 @@ func TestIndexerServiceResourceCleanup(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		mockRPC := NewMockRPCClient()

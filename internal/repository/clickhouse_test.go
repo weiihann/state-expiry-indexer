@@ -34,7 +34,7 @@ func setupClickHouseTestRepository(t *testing.T) (StateRepositoryInterface, func
 
 	// Use standard test configuration
 	config := getTestClickHouseConfig()
-	cleanup := testdb.SetupTestDatabase(t, true)
+	cleanup := testdb.SetupTestDatabase(t)
 
 	// Create repository
 	repo, err := NewRepository(t.Context(), config)
@@ -64,11 +64,11 @@ func TestClickHouseGetLastIndexedRange(t *testing.T) {
 		ctx := context.Background()
 
 		// First update to create metadata entry
-		accounts := map[string]uint64{"0x1234567890123456789012345678901234567890": 100}
+		accounts := map[uint64]map[string]struct{}{0: {"0x1234567890123456789012345678901234567890": {}}}
 		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage := map[string]map[string]uint64{}
+		storage := map[uint64]map[string]map[string]struct{}{}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 42)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 42)
 		require.NoError(t, err)
 
 		// Now check that we can retrieve it
@@ -84,13 +84,13 @@ func TestClickHouseGetLastIndexedRange(t *testing.T) {
 		ctx := context.Background()
 
 		// Update multiple times
-		accounts := map[string]uint64{"0x1234567890123456789012345678901234567890": 100}
+		accounts := map[uint64]map[string]struct{}{0: {"0x1234567890123456789012345678901234567890": {}}}
 		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage := map[string]map[string]uint64{}
+		storage := map[uint64]map[string]map[string]struct{}{}
 
 		ranges := []uint64{10, 25, 50, 100}
 		for _, rangeNum := range ranges {
-			err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, rangeNum)
+			err := repo.InsertRange(ctx, accounts, accountType, storage, rangeNum)
 			require.NoError(t, err)
 
 			lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -101,17 +101,17 @@ func TestClickHouseGetLastIndexedRange(t *testing.T) {
 }
 
 // TestClickHouseUpdateRangeDataInTx tests the main data update functionality
-func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
+func TestClickHouseInsertRange(t *testing.T) {
 	t.Run("EmptyMaps", func(t *testing.T) {
 		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
 
 		ctx := context.Background()
-		accounts := map[string]uint64{}
+		accounts := map[uint64]map[string]struct{}{}
 		accountType := map[string]bool{}
-		storage := map[string]map[string]uint64{}
+		storage := map[uint64]map[string]map[string]struct{}{}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
 		require.NoError(t, err)
 
 		// Verify metadata was updated
@@ -125,17 +125,19 @@ func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 		defer cleanup()
 
 		ctx := context.Background()
-		accounts := map[string]uint64{
-			"0x1234567890123456789012345678901234567890": 100,
-			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": 150,
+		accounts := map[uint64]map[string]struct{}{
+			0: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+			},
 		}
 		accountType := map[string]bool{
 			"0x1234567890123456789012345678901234567890": false, // EOA
 			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": true,  // Contract
 		}
-		storage := map[string]map[string]uint64{}
+		storage := map[uint64]map[string]map[string]struct{}{}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
 		require.NoError(t, err)
 
 		// For ClickHouse, we can verify data was inserted by checking if we can get analytics
@@ -150,16 +152,16 @@ func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 		defer cleanup()
 
 		ctx := context.Background()
-		accounts := map[string]uint64{}
+		accounts := map[uint64]map[string]struct{}{}
 		accountType := map[string]bool{}
-		storage := map[string]map[string]uint64{
-			"0x1234567890123456789012345678901234567890": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 100,
-				"0x0000000000000000000000000000000000000000000000000000000000000002": 150,
+		storage := map[uint64]map[string]map[string]struct{}{
+			0: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
 			},
 		}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
 		require.NoError(t, err)
 
 		// Verify storage was inserted by checking analytics
@@ -173,25 +175,29 @@ func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 		defer cleanup()
 
 		ctx := context.Background()
-		accounts := map[string]uint64{
-			"0x1234567890123456789012345678901234567890": 100,
-			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": 150,
+		accounts := map[uint64]map[string]struct{}{
+			0: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+			},
 		}
 		accountType := map[string]bool{
 			"0x1234567890123456789012345678901234567890": false,
 			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": true,
 		}
-		storage := map[string]map[string]uint64{
-			"0x1234567890123456789012345678901234567890": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 100,
-			},
-			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 150,
-				"0x0000000000000000000000000000000000000000000000000000000000000002": 160,
+		storage := map[uint64]map[string]map[string]struct{}{
+			0: {
+				"0x1234567890123456789012345678901234567890": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+					"0x0000000000000000000000000000000000000000000000000000000000000002": {},
+				},
 			},
 		}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 2)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 2)
 		require.NoError(t, err)
 
 		// Verify both accounts and storage were inserted
@@ -213,27 +219,27 @@ func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 		ctx := context.Background()
 
 		// Create large dataset to test batch processing
-		accounts := make(map[string]uint64)
+		accounts := make(map[uint64]map[string]struct{})
 		accountType := make(map[string]bool)
-		storage := make(map[string]map[string]uint64)
+		storage := make(map[uint64]map[string]map[string]struct{})
 
 		// Create 50 accounts with storage (smaller than PostgreSQL test for ClickHouse)
 		for i := 0; i < 50; i++ {
 			addr := generateClickHouseTestAddress(i)
-			accounts[addr] = uint64(1000 + i)
+			accounts[uint64(1000+i)] = map[string]struct{}{addr: {}}
 			accountType[addr] = i%2 == 0 // Alternate between EOA and Contract
 
 			// Add storage for contracts
 			if accountType[addr] {
-				storage[addr] = make(map[string]uint64)
+				storage[uint64(1000+i)] = make(map[string]map[string]struct{})
 				for j := 0; j < 3; j++ { // 3 storage slots per contract
 					slot := generateClickHouseTestStorageSlot(j)
-					storage[addr][slot] = uint64(1000 + i)
+					storage[uint64(1000+i)][addr] = map[string]struct{}{slot: {}}
 				}
 			}
 		}
 
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 10)
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 10)
 		require.NoError(t, err)
 
 		// Verify the data was inserted
@@ -247,130 +253,7 @@ func TestClickHouseUpdateRangeDataInTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(10), lastRange)
 	})
-}
 
-// TestClickHouseGetSyncStatus tests sync status reporting
-func TestClickHouseGetSyncStatus(t *testing.T) {
-	t.Run("EmptyDatabase", func(t *testing.T) {
-		repo, cleanup := setupClickHouseTestRepository(t)
-		t.Cleanup(cleanup)
-
-		ctx := t.Context()
-		status, err := repo.GetSyncStatus(ctx, 100, 10)
-		require.NoError(t, err)
-
-		assert.False(t, status.IsSynced, "Should not be synced with empty database")
-		assert.Equal(t, uint64(0), status.LastIndexedRange)
-		assert.Equal(t, uint64(0), status.EndBlock) // latestRange * rangeSize (0 * 10 = 0)
-	})
-
-	t.Run("PartialSync", func(t *testing.T) {
-		repo, cleanup := setupClickHouseTestRepository(t)
-		defer cleanup()
-
-		ctx := context.Background()
-
-		// Index some ranges
-		accounts := map[string]uint64{"0x1234567890123456789012345678901234567890": 100}
-		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage := map[string]map[string]uint64{}
-
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 50)
-		require.NoError(t, err)
-
-		status, err := repo.GetSyncStatus(ctx, 100, 10)
-		require.NoError(t, err)
-
-		assert.False(t, status.IsSynced, "Should not be synced when partially indexed")
-		assert.Equal(t, uint64(50), status.LastIndexedRange)
-		assert.Equal(t, uint64(50*10), status.EndBlock)
-	})
-
-	t.Run("FullySync", func(t *testing.T) {
-		repo, cleanup := setupClickHouseTestRepository(t)
-		defer cleanup()
-
-		ctx := context.Background()
-
-		// Index up to the latest range
-		accounts := map[string]uint64{"0x1234567890123456789012345678901234567890": 100}
-		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
-		storage := map[string]map[string]uint64{}
-
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 100)
-		require.NoError(t, err)
-
-		status, err := repo.GetSyncStatus(ctx, 100, 10)
-		require.NoError(t, err)
-
-		assert.True(t, status.IsSynced, "Should be synced when up to date")
-		assert.Equal(t, uint64(100), status.LastIndexedRange)
-		assert.Equal(t, uint64(100*10), status.EndBlock)
-	})
-}
-
-// TestClickHouseGetAnalyticsData tests comprehensive analytics functionality
-func TestClickHouseGetAnalyticsData(t *testing.T) {
-	t.Run("WithTestData", func(t *testing.T) {
-		repo, cleanup := setupClickHouseTestRepository(t)
-		t.Cleanup(cleanup)
-
-		ctx := t.Context()
-
-		// Create test data
-		accounts := make(map[string]uint64)
-		accountType := make(map[string]bool)
-		storage := make(map[string]map[string]uint64)
-
-		// Create 20 accounts: 10 EOAs and 10 contracts
-		for i := 0; i < 20; i++ {
-			addr := generateClickHouseTestAddress(i)
-			accounts[addr] = uint64(1000 + i*100) // Spread across blocks
-			accountType[addr] = i >= 10           // First 10 are EOAs, rest are contracts
-
-			// Add storage for contracts
-			if accountType[addr] {
-				storage[addr] = make(map[string]uint64)
-				for j := 0; j < 3; j++ { // 3 storage slots per contract
-					slot := generateClickHouseTestStorageSlot(j)
-					storage[addr][slot] = uint64(1000 + i*100 + j)
-				}
-			}
-		}
-
-		// Load test data
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountType, storage, 1)
-		require.NoError(t, err)
-
-		expiryBlock := uint64(1500) // Expire accounts/storage last accessed before this
-		currentBlock := uint64(2000)
-
-		analytics, err := repo.GetAnalyticsData(ctx, expiryBlock, currentBlock)
-		require.NoError(t, err)
-
-		// Verify basic account statistics
-		assert.Equal(t, 20, analytics.AccountExpiry.TotalAccounts, "Should have 20 total accounts")
-		assert.Equal(t, 10, analytics.AccountExpiry.TotalEOAs, "Should have 10 EOAs")
-		assert.Equal(t, 10, analytics.AccountExpiry.TotalContracts, "Should have 10 contracts")
-
-		// Some accounts should be expired based on expiry block
-		assert.GreaterOrEqual(t, analytics.AccountExpiry.ExpiredEOAs, 0, "Should have EOA data")
-		assert.GreaterOrEqual(t, analytics.AccountExpiry.ExpiredContracts, 0, "Should have contract data")
-
-		// Verify storage statistics
-		assert.Equal(t, 30, analytics.StorageSlotExpiry.TotalSlots, "Should have 30 storage slots (10 contracts * 3 slots)")
-		assert.GreaterOrEqual(t, analytics.StorageSlotExpiry.ExpiredSlots, 0, "Should have expired slots data")
-
-		// Verify consistency
-		assert.Equal(t, analytics.AccountExpiry.ExpiredEOAs+analytics.AccountExpiry.ExpiredContracts,
-			analytics.AccountExpiry.TotalExpiredAccounts, "Expired accounts should sum correctly")
-		assert.Equal(t, analytics.AccountExpiry.TotalEOAs+analytics.AccountExpiry.TotalContracts,
-			analytics.AccountExpiry.TotalAccounts, "Total accounts should sum correctly")
-	})
-}
-
-// TestClickHouseUpdateRangeDataWithAllEventsInTx tests archive mode functionality
-func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 	t.Run("EmptyEvents", func(t *testing.T) {
 		repo, cleanup := setupClickHouseTestRepository(t)
 		defer cleanup()
@@ -380,7 +263,7 @@ func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 		accountType := map[string]bool{}
 		storageAccesses := map[uint64]map[string]map[string]struct{}{}
 
-		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
+		err := repo.InsertRange(ctx, accountAccesses, accountType, storageAccesses, 1)
 		require.NoError(t, err)
 
 		// Verify metadata was updated
@@ -425,7 +308,7 @@ func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 			},
 		}
 
-		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
+		err := repo.InsertRange(ctx, accountAccesses, accountType, storageAccesses, 1)
 		require.NoError(t, err)
 
 		// For ClickHouse archive mode, ALL events should be stored
@@ -466,7 +349,7 @@ func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 
 		storageAccesses := map[uint64]map[string]map[string]struct{}{}
 
-		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountAccesses, accountType, storageAccesses, 1)
+		err := repo.InsertRange(ctx, accountAccesses, accountType, storageAccesses, 1)
 		require.NoError(t, err)
 
 		// In archive mode, ClickHouse should store all 3 access events for the same account
@@ -479,5 +362,65 @@ func TestClickHouseUpdateRangeDataWithAllEventsInTx(t *testing.T) {
 		lastRange, err := repo.GetLastIndexedRange(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(1), lastRange)
+	})
+}
+
+// TestClickHouseGetSyncStatus tests sync status reporting
+func TestClickHouseGetSyncStatus(t *testing.T) {
+	t.Run("EmptyDatabase", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		t.Cleanup(cleanup)
+
+		ctx := t.Context()
+		status, err := repo.GetSyncStatus(ctx, 100, 10)
+		require.NoError(t, err)
+
+		assert.False(t, status.IsSynced, "Should not be synced with empty database")
+		assert.Equal(t, uint64(0), status.LastIndexedRange)
+		assert.Equal(t, uint64(0), status.EndBlock) // latestRange * rangeSize (0 * 10 = 0)
+	})
+
+	t.Run("PartialSync", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Index some ranges
+		accounts := map[uint64]map[string]struct{}{100: {"0x1234567890123456789012345678901234567890": {}}}
+		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
+		storage := map[uint64]map[string]map[string]struct{}{}
+
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 50)
+		require.NoError(t, err)
+
+		status, err := repo.GetSyncStatus(ctx, 100, 10)
+		require.NoError(t, err)
+
+		assert.False(t, status.IsSynced, "Should not be synced when partially indexed")
+		assert.Equal(t, uint64(50), status.LastIndexedRange)
+		assert.Equal(t, uint64(50*10), status.EndBlock)
+	})
+
+	t.Run("FullySync", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Index up to the latest range
+		accounts := map[uint64]map[string]struct{}{100: {"0x1234567890123456789012345678901234567890": {}}}
+		accountType := map[string]bool{"0x1234567890123456789012345678901234567890": false}
+		storage := map[uint64]map[string]map[string]struct{}{}
+
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 100)
+		require.NoError(t, err)
+
+		status, err := repo.GetSyncStatus(ctx, 100, 10)
+		require.NoError(t, err)
+
+		assert.True(t, status.IsSynced, "Should be synced when up to date")
+		assert.Equal(t, uint64(100), status.LastIndexedRange)
+		assert.Equal(t, uint64(100*10), status.EndBlock)
 	})
 }

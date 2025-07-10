@@ -57,192 +57,6 @@ func (r *ClickHouseRepository) GetLastIndexedRange(ctx context.Context) (uint64,
 	return rangeNumber, nil
 }
 
-func (r *ClickHouseRepository) UpdateRangeDataInTx(
-	ctx context.Context,
-	accounts map[string]uint64,
-	accountType map[string]bool,
-	storage map[string]map[string]uint64,
-	rangeNumber uint64,
-) error {
-	log := logger.GetLogger("clickhouse-repo")
-
-	log.Info("Starting ClickHouse range data update",
-		"range_number", rangeNumber,
-		"accounts_count", len(accounts),
-		"storage_count", len(storage))
-
-	// Start transaction
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		log.Error("Could not begin transaction", "error", err)
-		return fmt.Errorf("could not begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Insert account access events (archive mode stores ALL events, not just latest)
-	if err := r.insertAccountAccessEventsInTx(ctx, tx, accounts, accountType); err != nil {
-		log.Error("Could not insert account access events", "error", err)
-		return fmt.Errorf("could not insert account access events: %w", err)
-	}
-
-	// Insert storage access events (archive mode stores ALL events, not just latest)
-	if err := r.insertStorageAccessEventsInTx(ctx, tx, storage); err != nil {
-		log.Error("Could not insert storage access events", "error", err)
-		return fmt.Errorf("could not insert storage access events: %w", err)
-	}
-
-	// Update the last indexed range
-	if err := r.updateLastIndexedRangeInTx(ctx, tx, rangeNumber); err != nil {
-		log.Error("Could not update last indexed range", "error", err)
-		return fmt.Errorf("could not update last indexed range: %w", err)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		log.Error("Could not commit transaction", "error", err)
-		return fmt.Errorf("could not commit transaction: %w", err)
-	}
-
-	log.Info("Successfully completed ClickHouse range data update",
-		"range_number", rangeNumber,
-		"accounts_inserted", len(accounts),
-		"storage_slots_inserted", r.countStorageSlots(storage))
-
-	return nil
-}
-
-// insertAccountAccessEventsInTx inserts ALL account access events for archive mode
-func (r *ClickHouseRepository) insertAccountAccessEventsInTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	accounts map[string]uint64,
-	accountType map[string]bool,
-) error {
-	if len(accounts) == 0 {
-		return nil
-	}
-
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse INSERT statement for accounts_archive table
-	// Use unhex() to convert hex strings to FixedString(20) in ClickHouse
-	query := `INSERT INTO accounts_archive (address, block_number, is_contract) VALUES `
-
-	var values []interface{}
-	var placeholders []string
-	paramIdx := 1
-
-	for address, blockNumber := range accounts {
-		// Clean the address hex string (remove 0x prefix and ensure proper length)
-		addressHex := strings.TrimPrefix(address, "0x")
-
-		if len(addressHex) != 40 {
-			log.Error("Invalid address length", "address", address, "hex_length", len(addressHex))
-			return fmt.Errorf("invalid address length: %s", address)
-		}
-
-		// Get account type (default to false if not found)
-		isContract := accountType[address]
-		var isContractByte uint8
-		if isContract {
-			isContractByte = 1
-		} else {
-			isContractByte = 0
-		}
-
-		placeholders = append(placeholders, "(unhex(?), ?, ?)")
-		values = append(values, addressHex, blockNumber, isContractByte)
-		paramIdx += 3
-	}
-
-	if len(placeholders) == 0 {
-		return nil // No valid accounts to insert
-	}
-
-	fullQuery := query + strings.Join(placeholders, ", ")
-
-	// Debug logging before execution
-	log.Debug("Executing ClickHouse account insert",
-		"query", fullQuery,
-		"values_count", len(values),
-		"placeholders_count", len(placeholders))
-
-	_, err := tx.ExecContext(ctx, fullQuery, values...)
-	if err != nil {
-		// Show first few values for debugging
-		debugValues := values
-		if len(values) > 6 {
-			debugValues = values[:6]
-		}
-		log.Error("Could not insert account access events",
-			"error", err,
-			"accounts_count", len(accounts),
-			"query", fullQuery,
-			"values_count", len(values),
-			"first_few_values", debugValues)
-		return fmt.Errorf("could not insert account access events: %w", err)
-	}
-
-	log.Debug("Inserted account access events", "count", len(accounts))
-	return nil
-}
-
-// insertStorageAccessEventsInTx inserts ALL storage access events for archive mode
-func (r *ClickHouseRepository) insertStorageAccessEventsInTx(ctx context.Context, tx *sql.Tx, storage map[string]map[string]uint64) error {
-	if len(storage) == 0 {
-		return nil
-	}
-
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse INSERT statement for storage_archive table
-	query := `INSERT INTO storage_archive (address, slot_key, block_number) VALUES `
-
-	var values []interface{}
-	var placeholders []string
-
-	for address, slots := range storage {
-		// Clean the address hex string (remove 0x prefix and ensure proper length)
-		addressHex := strings.TrimPrefix(address, "0x")
-
-		if len(addressHex) != 40 {
-			log.Error("Invalid address length", "address", address, "hex_length", len(addressHex))
-			return fmt.Errorf("invalid address length: %s", address)
-		}
-
-		for slot, blockNumber := range slots {
-			// Clean the slot hex string (remove 0x prefix and ensure proper length)
-			slotHex := strings.TrimPrefix(slot, "0x")
-
-			if len(slotHex) != 64 {
-				log.Error("Invalid slot length", "slot", slot, "hex_length", len(slotHex))
-				return fmt.Errorf("invalid slot length: %s", slot)
-			}
-
-			placeholders = append(placeholders, "(unhex(?), unhex(?), ?)")
-			values = append(values, addressHex, slotHex, blockNumber)
-		}
-	}
-
-	if len(placeholders) == 0 {
-		return nil // No valid storage slots to insert
-	}
-
-	fullQuery := query + strings.Join(placeholders, ", ")
-
-	_, err := tx.ExecContext(ctx, fullQuery, values...)
-	if err != nil {
-		log.Error("Could not insert storage access events",
-			"error", err,
-			"storage_accounts", len(storage),
-			"total_slots", len(placeholders))
-		return fmt.Errorf("could not insert storage access events: %w", err)
-	}
-
-	log.Debug("Inserted storage access events", "total_slots", len(placeholders))
-	return nil
-}
-
 // updateLastIndexedRangeInTx updates the last indexed range in metadata
 func (r *ClickHouseRepository) updateLastIndexedRangeInTx(ctx context.Context, tx *sql.Tx, rangeNumber uint64) error {
 	// ClickHouse uses ReplacingMergeTree, so we can simply INSERT the new value
@@ -254,15 +68,6 @@ func (r *ClickHouseRepository) updateLastIndexedRangeInTx(ctx context.Context, t
 	}
 
 	return nil
-}
-
-// countStorageSlots counts total storage slots across all addresses for logging
-func (r *ClickHouseRepository) countStorageSlots(storage map[string]map[string]uint64) int {
-	total := 0
-	for _, slots := range storage {
-		total += len(slots)
-	}
-	return total
 }
 
 func (r *ClickHouseRepository) GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error) {
@@ -662,8 +467,8 @@ func (r *ClickHouseRepository) getBaseStatistics(ctx context.Context, expiryBloc
 	return &stats, nil
 }
 
-// UpdateRangeDataWithAllEventsInTx processes all events for archive mode (stores ALL events, not just latest)
-func (r *ClickHouseRepository) UpdateRangeDataWithAllEventsInTx(
+// InsertRange processes all events for archive mode (stores ALL events, not just latest)
+func (r *ClickHouseRepository) InsertRange(
 	ctx context.Context,
 	accountAccesses map[uint64]map[string]struct{},
 	accountType map[string]bool,
@@ -841,7 +646,7 @@ func (r *ClickHouseRepository) insertAllStorageAccessEventsInTx(ctx context.Cont
 // Extended analytics methods for ClickHouse - Full implementation
 
 // GetExtendedAnalyticsData returns comprehensive extended analytics data
-func (r *ClickHouseRepository) GetExtendedAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error) {
+func (r *ClickHouseRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error) {
 	log := logger.GetLogger("clickhouse-repo")
 	log.Info("Starting ClickHouse extended analytics data retrieval", "expiry_block", expiryBlock, "current_block", currentBlock)
 
@@ -852,32 +657,33 @@ func (r *ClickHouseRepository) GetExtendedAnalyticsData(ctx context.Context, exp
 		return nil, fmt.Errorf("failed to get base statistics: %w", err)
 	}
 
+	res := &ExtendedAnalyticsData{}
+
 	// Build basic analytics (merged from old GetAnalyticsData)
-	basicAnalytics := &AnalyticsData{}
-	basicAnalytics.AccountExpiry = r.deriveAccountExpiryAnalysis(baseStats)
-	basicAnalytics.AccountDistribution = r.deriveAccountDistributionAnalysis(baseStats)
-	basicAnalytics.StorageSlotExpiry = r.deriveStorageSlotExpiryAnalysis(baseStats)
+	res.AccountExpiry = r.deriveAccountExpiryAnalysis(baseStats)
+	res.AccountDistribution = r.deriveAccountDistributionAnalysis(baseStats)
+	res.StorageSlotExpiry = r.deriveStorageSlotExpiryAnalysis(baseStats)
 
 	// Get contract storage analysis (merged from old GetAnalyticsData)
-	if err := r.getContractStorageAnalysis(ctx, expiryBlock, &basicAnalytics.ContractStorage); err != nil {
+	if err := r.getContractStorageAnalysis(ctx, expiryBlock, &res.ContractStorage); err != nil {
 		log.Error("Failed to get contract storage analysis", "error", err)
 		return nil, fmt.Errorf("failed to get contract storage analysis: %w", err)
 	}
 
 	// Get storage expiry analysis and fully expired contracts (merged from old GetAnalyticsData)
-	if err := r.getStorageExpiryAnalysis(ctx, expiryBlock, &basicAnalytics.StorageExpiry, &basicAnalytics.FullyExpiredContracts); err != nil {
+	if err := r.getStorageExpiryAnalysis(ctx, expiryBlock, &res.StorageExpiry, &res.FullyExpiredContracts); err != nil {
 		log.Error("Failed to get storage expiry analysis", "error", err)
 		return nil, fmt.Errorf("failed to get storage expiry analysis: %w", err)
 	}
 
 	// Set default empty values for active contracts with expired storage analysis (merged from old GetAnalyticsData)
-	basicAnalytics.ActiveContractsExpiredStorage = ActiveContractsExpiredStorageAnalysis{
+	res.ActiveContractsExpiredStorage = ActiveContractsExpiredStorageAnalysis{
 		ThresholdAnalysis:    []ExpiredStorageThreshold{},
 		TotalActiveContracts: 0,
 	}
 
 	// Get complete expiry analysis (merged from old GetAnalyticsData)
-	if err := r.getCompleteExpiryAnalysis(ctx, expiryBlock, &basicAnalytics.CompleteExpiry); err != nil {
+	if err := r.getCompleteExpiryAnalysis(ctx, expiryBlock, &res.CompleteExpiry); err != nil {
 		log.Error("Failed to get complete expiry analysis", "error", err)
 		return nil, fmt.Errorf("failed to get complete expiry analysis: %w", err)
 	}
@@ -908,18 +714,17 @@ func (r *ClickHouseRepository) GetExtendedAnalyticsData(ctx context.Context, exp
 	}
 
 	log.Info("Successfully completed ClickHouse extended analytics data retrieval",
-		"expired_accounts", basicAnalytics.AccountExpiry.TotalExpiredAccounts,
-		"total_accounts", basicAnalytics.AccountExpiry.TotalAccounts,
-		"expired_slots", basicAnalytics.StorageSlotExpiry.ExpiredSlots,
-		"total_slots", basicAnalytics.StorageSlotExpiry.TotalSlots)
+		"expired_accounts", res.AccountExpiry.TotalExpiredAccounts,
+		"total_accounts", res.AccountExpiry.TotalAccounts,
+		"expired_slots", res.StorageSlotExpiry.ExpiredSlots,
+		"total_slots", res.StorageSlotExpiry.TotalSlots)
 
-	return &ExtendedAnalyticsData{
-		Basic:         *basicAnalytics,
-		SingleAccess:  *singleAccess,
-		BlockActivity: *blockActivity,
-		TimeSeries:    *timeSeries,
-		StorageVolume: *storageVolume,
-	}, nil
+	res.SingleAccess = *singleAccess
+	res.BlockActivity = *blockActivity
+	res.TimeSeries = *timeSeries
+	res.StorageVolume = *storageVolume
+
+	return res, nil
 }
 
 // GetSingleAccessAnalytics returns analytics for accounts/storage slots accessed only once

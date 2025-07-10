@@ -12,16 +12,9 @@ import (
 type StateRepositoryInterface interface {
 	// Range-based processing methods (used by indexer)
 	GetLastIndexedRange(ctx context.Context) (uint64, error)
-	UpdateRangeDataInTx(
-		ctx context.Context,
-		accounts map[string]uint64,
-		accountType map[string]bool,
-		storage map[string]map[string]uint64,
-		rangeNumber uint64,
-	) error
 
 	// Archive mode method for storing all events (used by indexer in archive mode)
-	UpdateRangeDataWithAllEventsInTx(
+	InsertRange(
 		ctx context.Context,
 		accountAccesses map[uint64]map[string]struct{},
 		accountType map[string]bool,
@@ -33,7 +26,7 @@ type StateRepositoryInterface interface {
 	GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
 
 	// Extended analytics methods for comprehensive state analysis
-	GetExtendedAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error)
+	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error)
 	GetSingleAccessAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*SingleAccessAnalysis, error)
 	GetBlockActivityAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, topN int) (*BlockActivityAnalysis, error)
 	GetTimeSeriesAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, windowSize int) (*TimeSeriesAnalysis, error)
@@ -62,19 +55,9 @@ func NewAdvancedAnalyticsError(operation, database, message string) *AdvancedAna
 
 // NewRepository creates the appropriate repository implementation based on configuration
 func NewRepository(ctx context.Context, config internal.Config) (StateRepositoryInterface, error) {
-	if config.ArchiveMode {
-		// ClickHouse archive mode - use SQL interface for repository compatibility
-		db, err := db.ConnectClickHouseSQL(config)
-		if err != nil {
-			return nil, err
-		}
-		return NewClickHouseRepository(db), nil
-	} else {
-		// PostgreSQL default mode
-		db, err := db.Connect(ctx, config)
-		if err != nil {
-			return nil, err
-		}
-		return NewPostgreSQLRepository(db), nil
+	db, err := db.ConnectClickHouseSQL(config)
+	if err != nil {
+		return nil, err
 	}
+	return NewClickHouseRepository(db), nil
 }

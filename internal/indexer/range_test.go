@@ -23,19 +23,8 @@ func TestRangeProcessing(t *testing.T) {
 		rangeSize   int
 	}{
 		{
-			name:        "PostgreSQL Range Processing",
-			archiveMode: false,
-			rangeSize:   100,
-		},
-		{
-			name:        "ClickHouse Range Processing",
-			archiveMode: true,
-			rangeSize:   100,
-		},
-		{
-			name:        "Large Range Processing",
-			archiveMode: true,
-			rangeSize:   1000,
+			name:      "Large Range Processing",
+			rangeSize: 1000,
 		},
 	}
 
@@ -46,11 +35,11 @@ func TestRangeProcessing(t *testing.T) {
 			defer cleanupDir()
 
 			// Create test configuration
-			config := createTestConfig(tt.archiveMode, dataDir)
+			config := createTestConfig(dataDir)
 			config.RangeSize = tt.rangeSize
 
 			// Setup database
-			repo, cleanupDB := createTestRepository(t, tt.archiveMode, config)
+			repo, cleanupDB := createTestRepository(t, config)
 			defer cleanupDB()
 
 			// Create mock RPC client with test data
@@ -80,11 +69,7 @@ func TestRangeProcessing(t *testing.T) {
 			t.Run("ProcessRange", func(t *testing.T) {
 				// Create appropriate state access
 				var sa StateAccess
-				if tt.archiveMode {
-					sa = newStateAccessArchive()
-				} else {
-					sa = newStateAccessLatest()
-				}
+				sa = newStateAccessArchive()
 
 				// Process range 1
 				err := indexer.ProcessRange(ctx, 1, sa, true)
@@ -223,16 +208,10 @@ func TestRangeFileOperations(t *testing.T) {
 // TestRangeMetadataTracking tests range metadata tracking in the database
 func TestRangeMetadataTracking(t *testing.T) {
 	tests := []struct {
-		name        string
-		archiveMode bool
+		name string
 	}{
 		{
-			name:        "PostgreSQL Metadata Tracking",
-			archiveMode: false,
-		},
-		{
-			name:        "ClickHouse Metadata Tracking",
-			archiveMode: true,
+			name: "ClickHouse Metadata Tracking",
 		},
 	}
 
@@ -242,8 +221,8 @@ func TestRangeMetadataTracking(t *testing.T) {
 			dataDir, cleanupDir := createTestDataDir(t)
 			defer cleanupDir()
 
-			config := createTestConfig(tt.archiveMode, dataDir)
-			repo, cleanupDB := createTestRepository(t, tt.archiveMode, config)
+			config := createTestConfig(dataDir)
+			repo, cleanupDB := createTestRepository(t, config)
 			defer cleanupDB()
 
 			ctx := context.Background()
@@ -259,11 +238,7 @@ func TestRangeMetadataTracking(t *testing.T) {
 			t.Run("MetadataUpdates", func(t *testing.T) {
 				// Create appropriate state access
 				var sa StateAccess
-				if tt.archiveMode {
-					sa = newStateAccessArchive()
-				} else {
-					sa = newStateAccessLatest()
-				}
+				sa = newStateAccessArchive()
 
 				// Simulate processing range 1
 				err := sa.AddAccount("0x1111111111111111111111111111111111111111", 100, false)
@@ -328,15 +303,15 @@ func TestRangeErrorRecovery(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
-		repo, cleanupDB := createTestRepository(t, false, config)
+		config := createTestConfig(dataDir)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		// Close the database connection to simulate errors
 		cleanupDB()
 
 		// Create state access
-		sa := newStateAccessLatest()
+		sa := newStateAccessArchive()
 		err := sa.AddAccount("0x1111111111111111111111111111111111111111", 100, false)
 		require.NoError(t, err, "Should be able to add account")
 
@@ -376,10 +351,10 @@ func TestLargeRangeProcessing(t *testing.T) {
 		dataDir, cleanupDir := createTestDataDir(t)
 		defer cleanupDir()
 
-		config := createTestConfig(false, dataDir)
+		config := createTestConfig(dataDir)
 		config.RangeSize = 1000 // Large range size
 
-		repo, cleanupDB := createTestRepository(t, false, config)
+		repo, cleanupDB := createTestRepository(t, config)
 		defer cleanupDB()
 
 		// Create mock RPC client
@@ -396,7 +371,7 @@ func TestLargeRangeProcessing(t *testing.T) {
 		ctx := context.Background()
 
 		// Create state access
-		sa := newStateAccessLatest()
+		sa := newStateAccessArchive()
 
 		// Process large range
 		start := time.Now()

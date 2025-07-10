@@ -485,7 +485,7 @@ ORDER BY deployment_block DESC;
 ## Support and Resources
 
 ### Documentation
-- [ClickHouse Schema Documentation](../db/ch-migrations/README.md)
+- [ClickHouse Schema Documentation](../db/migrations/README.md)
 - [API Documentation](API.md)
 - [Configuration Reference](CONFIGURATION.md)
 

@@ -23,23 +23,17 @@ import (
 // TestAPIServer tests the API server endpoints with database integration
 func TestAPIServer(t *testing.T) {
 	tests := []struct {
-		name        string
-		archiveMode bool
+		name string
 	}{
 		{
-			name:        "PostgreSQL API Server",
-			archiveMode: false,
-		},
-		{
-			name:        "ClickHouse API Server",
-			archiveMode: true,
+			name: "ClickHouse API Server",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup test environment
-			repo, cleanupDB := setupTestRepository(t, tt.archiveMode)
+			repo, cleanupDB := setupTestRepository(t)
 			defer cleanupDB()
 
 			// Create mock RPC client
@@ -50,7 +44,7 @@ func TestAPIServer(t *testing.T) {
 			server := NewTestServer(repo, mockRPC, rangeSize)
 
 			// Setup test data
-			setupTestData(t, repo, tt.archiveMode)
+			setupTestData(t, repo)
 
 			// Test all endpoints
 			t.Run("HealthCheck", func(t *testing.T) {
@@ -70,8 +64,7 @@ func TestAPIServer(t *testing.T) {
 
 // TestAPIEndpointErrorHandling tests error handling for all endpoints
 func TestAPIEndpointErrorHandling(t *testing.T) {
-	// Setup test environment with PostgreSQL
-	repo, cleanupDB := setupTestRepository(t, false)
+	repo, cleanupDB := setupTestRepository(t)
 	defer cleanupDB()
 
 	mockRPC := createMockRPCClient()
@@ -127,8 +120,7 @@ func TestAPIEndpointErrorHandling(t *testing.T) {
 
 // TestAPIServerWithDatabaseFailure tests API behavior when database is unavailable
 func TestAPIServerWithDatabaseFailure(t *testing.T) {
-	// Setup test environment with PostgreSQL
-	repo, cleanupDB := setupTestRepository(t, false)
+	repo, cleanupDB := setupTestRepository(t)
 	cleanupDB() // Close database connection to simulate failure
 
 	mockRPC := createMockRPCClient()
@@ -171,8 +163,7 @@ func TestAPIServerWithDatabaseFailure(t *testing.T) {
 
 // TestAPIServerWithRPCFailure tests API behavior when RPC client fails
 func TestAPIServerWithRPCFailure(t *testing.T) {
-	// Setup test environment with PostgreSQL
-	repo, cleanupDB := setupTestRepository(t, false)
+	repo, cleanupDB := setupTestRepository(t)
 	defer cleanupDB()
 
 	// Create failing RPC client
@@ -201,8 +192,7 @@ func TestAPIServerWithRPCFailure(t *testing.T) {
 
 // TestAPIServerConcurrency tests concurrent requests to API endpoints
 func TestAPIServerConcurrency(t *testing.T) {
-	// Setup test environment with PostgreSQL
-	repo, cleanupDB := setupTestRepository(t, false)
+	repo, cleanupDB := setupTestRepository(t)
 	defer cleanupDB()
 
 	mockRPC := createMockRPCClient()
@@ -213,7 +203,7 @@ func TestAPIServerConcurrency(t *testing.T) {
 	router := createTestRouter(server)
 
 	// Setup test data
-	setupTestData(t, repo, false)
+	setupTestData(t, repo)
 
 	t.Run("Concurrent analytics requests", func(t *testing.T) {
 		concurrency := 10
@@ -515,77 +505,25 @@ func createTestRouter(server *TestServer) http.Handler {
 	return r
 }
 
-// createTestAPIConfig creates a test configuration for API server
-func createTestAPIConfig(archiveMode bool) internal.Config {
-	testConfig := testdb.GetTestConfig()
-
-	if archiveMode {
-		return internal.Config{
-			ClickHouseHost:     testConfig.ClickHouse.Host,
-			ClickHousePort:     testConfig.ClickHouse.Port,
-			ClickHouseUser:     testConfig.ClickHouse.User,
-			ClickHousePassword: testConfig.ClickHouse.Password,
-			ClickHouseDatabase: testConfig.ClickHouse.Database,
-			ClickHouseMaxConns: 10,
-			ClickHouseMinConns: 2,
-			APIPort:            8080,
-			RPCURLS:            []string{"http://localhost:8545"},
-			Environment:        "test",
-			ArchiveMode:        true,
-		}
-	}
-
-	return internal.Config{
-		DBHost:      testConfig.PostgreSQL.Host,
-		DBPort:      testConfig.PostgreSQL.Port,
-		DBUser:      testConfig.PostgreSQL.User,
-		DBPassword:  testConfig.PostgreSQL.Password,
-		DBName:      testConfig.PostgreSQL.Database,
-		DBMaxConns:  10,
-		DBMinConns:  2,
-		APIPort:     8080,
-		RPCURLS:     []string{"http://localhost:8545"},
-		Environment: "test",
-		ArchiveMode: false,
-	}
-}
-
 // setupTestRepository creates a test repository with database setup
-func setupTestRepository(t *testing.T, archiveMode bool) (repository.StateRepositoryInterface, func()) {
+func setupTestRepository(t *testing.T) (repository.StateRepositoryInterface, func()) {
 	t.Helper()
 
-	cleanup := testdb.SetupTestDatabase(t, archiveMode)
+	cleanup := testdb.SetupTestDatabase(t)
 
 	// Get test configuration
 	testConfig := testdb.GetTestConfig()
 
-	var config internal.Config
-	if archiveMode {
-		config = internal.Config{
-			ClickHouseHost:     testConfig.ClickHouse.Host,
-			ClickHousePort:     testConfig.ClickHouse.Port,
-			ClickHouseUser:     testConfig.ClickHouse.User,
-			ClickHousePassword: testConfig.ClickHouse.Password,
-			ClickHouseDatabase: testConfig.ClickHouse.Database,
-			ClickHouseMaxConns: 10,
-			ClickHouseMinConns: 2,
-			RPCURLS:            []string{"http://localhost:8545"},
-			Environment:        "test",
-			ArchiveMode:        true,
-		}
-	} else {
-		config = internal.Config{
-			DBHost:      testConfig.PostgreSQL.Host,
-			DBPort:      testConfig.PostgreSQL.Port,
-			DBUser:      testConfig.PostgreSQL.User,
-			DBPassword:  testConfig.PostgreSQL.Password,
-			DBName:      testConfig.PostgreSQL.Database,
-			DBMaxConns:  10,
-			DBMinConns:  2,
-			RPCURLS:     []string{"http://localhost:8545"},
-			Environment: "test",
-			ArchiveMode: false,
-		}
+	config := internal.Config{
+		ClickHouseHost:     testConfig.ClickHouse.Host,
+		ClickHousePort:     testConfig.ClickHouse.Port,
+		ClickHouseUser:     testConfig.ClickHouse.User,
+		ClickHousePassword: testConfig.ClickHouse.Password,
+		ClickHouseDatabase: testConfig.ClickHouse.Database,
+		ClickHouseMaxConns: 10,
+		ClickHouseMinConns: 2,
+		RPCURLS:            []string{"http://localhost:8545"},
+		Environment:        "test",
 	}
 
 	ctx := context.Background()
@@ -596,75 +534,45 @@ func setupTestRepository(t *testing.T, archiveMode bool) (repository.StateReposi
 }
 
 // setupTestData creates test data for API endpoint testing
-func setupTestData(t *testing.T, repo repository.StateRepositoryInterface, archiveMode bool) {
+func setupTestData(t *testing.T, repo repository.StateRepositoryInterface) {
 	t.Helper()
 
 	ctx := context.Background()
 
 	// Create test data for analytics
-	if archiveMode {
-		// For ClickHouse, use archive mode data structure
-		accountsByBlock := map[uint64]map[string]struct{}{
-			100: {
-				"0x1111111111111111111111111111111111111111": {},
-				"0x2222222222222222222222222222222222222222": {},
-			},
-			200: {
-				"0x3333333333333333333333333333333333333333": {},
-				"0x4444444444444444444444444444444444444444": {},
-			},
-		}
-
-		accountTypes := map[string]bool{
-			"0x1111111111111111111111111111111111111111": false, // EOA
-			"0x2222222222222222222222222222222222222222": true,  // Contract
-			"0x3333333333333333333333333333333333333333": false, // EOA
-			"0x4444444444444444444444444444444444444444": true,  // Contract
-		}
-
-		storageByBlock := map[uint64]map[string]map[string]struct{}{
-			100: {
-				"0x2222222222222222222222222222222222222222": {
-					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
-					"0x0000000000000000000000000000000000000000000000000000000000000002": {},
-				},
-			},
-			200: {
-				"0x4444444444444444444444444444444444444444": {
-					"0x0000000000000000000000000000000000000000000000000000000000000003": {},
-				},
-			},
-		}
-
-		err := repo.UpdateRangeDataWithAllEventsInTx(ctx, accountsByBlock, accountTypes, storageByBlock, 1)
-		require.NoError(t, err, "Failed to setup test data for archive mode")
-	} else {
-		// For PostgreSQL, use latest mode data structure
-		accounts := map[string]uint64{
-			"0x1111111111111111111111111111111111111111": 100,
-			"0x2222222222222222222222222222222222222222": 150,
-			"0x3333333333333333333333333333333333333333": 200,
-			"0x4444444444444444444444444444444444444444": 250,
-		}
-
-		accountTypes := map[string]bool{
-			"0x1111111111111111111111111111111111111111": false, // EOA
-			"0x2222222222222222222222222222222222222222": true,  // Contract
-			"0x3333333333333333333333333333333333333333": false, // EOA
-			"0x4444444444444444444444444444444444444444": true,  // Contract
-		}
-
-		storage := map[string]map[string]uint64{
-			"0x2222222222222222222222222222222222222222": {
-				"0x0000000000000000000000000000000000000000000000000000000000000001": 100,
-				"0x0000000000000000000000000000000000000000000000000000000000000002": 120,
-			},
-			"0x4444444444444444444444444444444444444444": {
-				"0x0000000000000000000000000000000000000000000000000000000000000003": 200,
-			},
-		}
-
-		err := repo.UpdateRangeDataInTx(ctx, accounts, accountTypes, storage, 1)
-		require.NoError(t, err, "Failed to setup test data for latest mode")
+	// For ClickHouse, use archive mode data structure
+	accountsByBlock := map[uint64]map[string]struct{}{
+		100: {
+			"0x1111111111111111111111111111111111111111": {},
+			"0x2222222222222222222222222222222222222222": {},
+		},
+		200: {
+			"0x3333333333333333333333333333333333333333": {},
+			"0x4444444444444444444444444444444444444444": {},
+		},
 	}
+
+	accountTypes := map[string]bool{
+		"0x1111111111111111111111111111111111111111": false, // EOA
+		"0x2222222222222222222222222222222222222222": true,  // Contract
+		"0x3333333333333333333333333333333333333333": false, // EOA
+		"0x4444444444444444444444444444444444444444": true,  // Contract
+	}
+
+	storageByBlock := map[uint64]map[string]map[string]struct{}{
+		100: {
+			"0x2222222222222222222222222222222222222222": {
+				"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				"0x0000000000000000000000000000000000000000000000000000000000000002": {},
+			},
+		},
+		200: {
+			"0x4444444444444444444444444444444444444444": {
+				"0x0000000000000000000000000000000000000000000000000000000000000003": {},
+			},
+		},
+	}
+
+	err := repo.InsertRange(ctx, accountsByBlock, accountTypes, storageByBlock, 1)
+	require.NoError(t, err, "Failed to setup test data for archive mode")
 }
