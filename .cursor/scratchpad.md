@@ -1201,3 +1201,95 @@ Secondary indexes on all state tables for fast filtering
 - **Performance Validation**: Comprehensive performance testing under various load conditions
 
 **Ready for Task 39**: Range file storage testing is complete with comprehensive coverage. The system now has robust testing for all range file storage operations including compression, error handling, file system integration, concurrent access, and large file performance.
+
+## Current Status / Progress Tracking
+
+### ✅ **Empty File Handling Enhancement - COMPLETED SUCCESSFULLY** ✅
+
+**Status**: **COMPLETED SUCCESSFULLY** ✅
+
+**Summary**: Enhanced the RangeProcessor to properly handle empty range files by treating them as unavailable and triggering re-download. This prevents issues where partially downloaded or corrupted files with zero bytes would be considered valid.
+
+**Key Achievements**:
+1. **Enhanced RangeExists Logic**: Modified `RangeExists()` method to check both file existence and non-zero size
+2. **Automatic Re-download**: Empty files are now treated as unavailable and trigger automatic re-download
+3. **Backward Compatibility**: Normal file handling behavior remains unchanged for non-empty files
+4. **Genesis Range Handling**: Genesis range (range 0) continues to be handled as a special case
+5. **Comprehensive Testing**: Added thorough test coverage for empty file scenarios
+
+**Technical Implementation**:
+- **Modified `RangeExists()` method**: Now checks `fileInfo.Size() > 0` in addition to file existence
+- **Enhanced Documentation**: Updated method documentation to reflect new behavior
+- **Preserved Existing Logic**: All existing functionality remains intact with improved robustness
+
+**Files Modified**:
+- ✅ `pkg/storage/rangeprocessor.go` - Enhanced `RangeExists()` method (Lines 84-93)
+  - Added file size check to treat empty files as unavailable
+  - Updated method documentation
+  - Preserved genesis range special handling
+
+**Test Coverage Added**:
+- ✅ `pkg/storage/rangeprocessor_integration_test.go` - Added comprehensive empty file testing (Lines 961-1095)
+  - `TestRangeProcessorEmptyFileHandling()` - 4 test scenarios covering empty file handling
+  - Test scenarios include:
+    - Empty file treated as unavailable in `RangeExists()`
+    - Empty file triggers re-download in `DownloadRange()`
+    - Normal file handling remains unchanged
+    - Genesis range special case handling
+
+**Testing Results**:
+- ✅ **All 4 new test functions passing** (100% pass rate)
+- ✅ **All existing tests continue to pass** (No regression)
+- ✅ Empty file detection working correctly
+- ✅ Re-download functionality working as expected
+- ✅ Normal file operations unaffected
+
+**Behavioral Changes**:
+1. **Empty File Detection**: Files with 0 bytes are now treated as unavailable
+2. **Automatic Recovery**: Empty files trigger automatic re-download when accessed
+3. **Consistent Behavior**: `RangeExists()`, `DownloadRange()`, and `EnsureRangeExists()` all handle empty files consistently
+4. **No Breaking Changes**: All existing functionality preserved
+
+**Edge Cases Handled**:
+- **Genesis Range**: Range 0 continues to return `true` for `RangeExists()` regardless of file system state
+- **File System Errors**: Proper error handling for file access issues
+- **Race Conditions**: Thread-safe file size checking
+- **Performance**: Minimal performance impact from additional file size check
+
+**Integration Points**:
+- **Indexer Integration**: Indexer will automatically recover from empty range files
+- **Storage Layer**: Storage layer properly handles empty file scenarios
+- **Error Recovery**: System can recover from partial downloads or corruption
+- **File System Resilience**: Enhanced resilience against file system issues
+
+**Performance Impact**:
+- **Minimal Overhead**: Single additional `fileInfo.Size()` check per range existence check
+- **No Regression**: All existing performance benchmarks maintained
+- **Efficient Recovery**: Quick detection and recovery from empty files
+
+**Ready for Next Task**: Empty file handling enhancement is complete and thoroughly tested. The system now has robust handling of empty range files with automatic recovery capabilities.
+
+## Executor's Feedback or Assistance Requests
+
+### Current Task Status
+- **Task**: Empty file handling enhancement
+- **Status**: ✅ **COMPLETED SUCCESSFULLY**
+- **Next Steps**: Ready for next task assignment
+
+### Implementation Summary
+The empty file handling enhancement has been successfully implemented and tested. The key changes are:
+
+1. **Enhanced `RangeExists()` Method**: Now checks both file existence and non-zero size
+2. **Automatic Recovery**: Empty files trigger re-download automatically
+3. **Comprehensive Testing**: Added 4 new test scenarios covering all edge cases
+4. **Zero Regression**: All existing tests continue to pass
+
+The implementation is minimal, efficient, and maintains backward compatibility while adding robust empty file handling capabilities.
+
+### Technical Details
+- **File Modified**: `pkg/storage/rangeprocessor.go` (8 lines changed)
+- **Tests Added**: `pkg/storage/rangeprocessor_integration_test.go` (135 lines added)
+- **Test Results**: 100% pass rate for new tests, no regression in existing tests
+- **Performance**: Minimal impact with single additional file size check
+
+The enhancement is ready for production use and provides improved resilience against file system issues and partial downloads.

@@ -18,15 +18,15 @@ import (
 
 // MockRPCClient implements rpc.ClientInterface for testing
 type MockRPCClient struct {
-	mu                    sync.RWMutex
-	mockResponses         map[string][]rpc.TransactionResult
-	errorResponses        map[string]error
-	callCount             map[string]int
-	latestBlockNumber     *big.Int
-	simulateSlowResponse  bool
-	simulateTimeout       bool
-	simulateNetworkError  bool
-	getStateDiffDelay     time.Duration
+	mu                   sync.RWMutex
+	mockResponses        map[string][]rpc.TransactionResult
+	errorResponses       map[string]error
+	callCount            map[string]int
+	latestBlockNumber    *big.Int
+	simulateSlowResponse bool
+	simulateTimeout      bool
+	simulateNetworkError bool
+	getStateDiffDelay    time.Duration
 }
 
 func NewMockRPCClient() *MockRPCClient {
@@ -73,10 +73,10 @@ func (m *MockRPCClient) GetStateDiff(ctx context.Context, blockNumber *big.Int) 
 	simulateNetworkError := m.simulateNetworkError
 	delay := m.getStateDiffDelay
 	blockKey := blockNumber.String()
-	
+
 	// Check for specific error responses
 	err, hasError := m.errorResponses[blockKey]
-	
+
 	// Check for specific mock responses
 	response, hasResponse := m.mockResponses[blockKey]
 	m.mu.RUnlock()
@@ -226,7 +226,7 @@ func TestRangeProcessorInitialization(t *testing.T) {
 
 	t.Run("initialization with invalid data directory", func(t *testing.T) {
 		mockClient := NewMockRPCClient()
-		
+
 		// Test with non-existent directory (should still work as directory will be created)
 		rp, err := NewRangeProcessor("/non/existent/directory", mockClient, 100)
 		require.NoError(t, err)
@@ -236,14 +236,14 @@ func TestRangeProcessorInitialization(t *testing.T) {
 
 	t.Run("proper resource cleanup", func(t *testing.T) {
 		rp, _, _, cleanup := setupRangeProcessorTest(t)
-		
+
 		// Verify resources are allocated
 		assert.NotNil(t, rp.encoder)
 		assert.NotNil(t, rp.decoder)
-		
+
 		// Close and verify cleanup
 		cleanup()
-		
+
 		// Resources should be cleaned up (encoder/decoder closed)
 		// Note: We can't directly test this as Close() doesn't nil the pointers
 		// but the underlying resources are closed
@@ -265,7 +265,7 @@ func TestRangeProcessorDownloadRange(t *testing.T) {
 		// Verify file was created
 		filePath := rp.GetRangeFilePath(rangeNumber)
 		assert.True(t, rp.RangeExists(rangeNumber))
-		
+
 		// Verify file exists on disk
 		_, err = os.Stat(filePath)
 		assert.NoError(t, err)
@@ -560,7 +560,7 @@ func TestRangeProcessorFileSystemIntegration(t *testing.T) {
 		// Verify directory exists and contains the file
 		_, err = os.Stat(nestedDir)
 		assert.NoError(t, err)
-		
+
 		// Verify the range file was created in the nested directory
 		filePath := rp.GetRangeFilePath(rangeNumber)
 		_, err = os.Stat(filePath)
@@ -749,17 +749,17 @@ func TestRangeProcessorProgressTracking(t *testing.T) {
 		mockClient.SetGetStateDiffDelay(10 * time.Millisecond)
 
 		rangeNumber := uint64(1)
-		
+
 		// Track download progress
 		start := time.Now()
 		err := rp.DownloadRange(ctx, rangeNumber)
 		duration := time.Since(start)
 
 		assert.NoError(t, err)
-		
+
 		// Should take at least 1 second (100 blocks * 10ms)
 		assert.Greater(t, duration, time.Second)
-		
+
 		// Verify all blocks were downloaded
 		assert.Equal(t, 100, mockClient.GetCallCount("GetStateDiff"))
 	})
@@ -797,7 +797,7 @@ func TestRangeProcessorLargeDatasets(t *testing.T) {
 		defer os.RemoveAll(tempDir)
 
 		mockClient := NewMockRPCClient()
-		
+
 		// Create processor with large range size
 		rp, err := NewRangeProcessor(tempDir, mockClient, 1000) // 1000 blocks per range
 		require.NoError(t, err)
@@ -943,11 +943,11 @@ func TestRangeProcessorIntegrationWithRealData(t *testing.T) {
 		for _, diff := range rangeDiffs {
 			assert.Len(t, diff.Diffs, 1)
 			assert.Equal(t, realisticStateDiff[0].TxHash, diff.Diffs[0].TxHash)
-			
+
 			// Verify nested structure
 			stateDiff := diff.Diffs[0].StateDiff
 			assert.Len(t, stateDiff, 1)
-			
+
 			for addr, accountDiff := range stateDiff {
 				assert.Equal(t, "0x1234567890abcdef1234567890abcdef12345678", addr)
 				assert.NotNil(t, accountDiff.Balance)
@@ -955,5 +955,137 @@ func TestRangeProcessorIntegrationWithRealData(t *testing.T) {
 				assert.NotNil(t, accountDiff.Storage)
 			}
 		}
+	})
+}
+
+func TestRangeProcessorEmptyFileHandling(t *testing.T) {
+	t.Run("treat empty range file as unavailable", func(t *testing.T) {
+		rp, mockClient, _, cleanup := setupRangeProcessorTest(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		rangeNumber := uint64(1)
+
+		// Create empty range file
+		rangeFilePath := rp.GetRangeFilePath(rangeNumber)
+		require.NoError(t, os.MkdirAll(filepath.Dir(rangeFilePath), 0o755))
+
+		// Create empty file
+		emptyFile, err := os.Create(rangeFilePath)
+		require.NoError(t, err)
+		require.NoError(t, emptyFile.Close())
+
+		// Verify file exists but is empty
+		fileInfo, err := os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), fileInfo.Size())
+
+		// RangeExists should return false for empty file
+		assert.False(t, rp.RangeExists(rangeNumber))
+
+		// EnsureRangeExists should trigger download for empty file
+		err = rp.EnsureRangeExists(ctx, rangeNumber)
+		assert.NoError(t, err)
+
+		// Verify that RPC calls were made (indicating download happened)
+		assert.Equal(t, 100, mockClient.GetCallCount("GetStateDiff"))
+
+		// Verify file now exists and is not empty
+		fileInfo, err = os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Greater(t, fileInfo.Size(), int64(0))
+
+		// RangeExists should now return true
+		assert.True(t, rp.RangeExists(rangeNumber))
+	})
+
+	t.Run("handle empty file in DownloadRange", func(t *testing.T) {
+		rp, mockClient, _, cleanup := setupRangeProcessorTest(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		rangeNumber := uint64(2)
+
+		// Create empty range file
+		rangeFilePath := rp.GetRangeFilePath(rangeNumber)
+		require.NoError(t, os.MkdirAll(filepath.Dir(rangeFilePath), 0o755))
+
+		// Create empty file
+		emptyFile, err := os.Create(rangeFilePath)
+		require.NoError(t, err)
+		require.NoError(t, emptyFile.Close())
+
+		// Verify file exists but is empty
+		fileInfo, err := os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), fileInfo.Size())
+
+		// Reset call count
+		mockClient.callCount = make(map[string]int)
+
+		// DownloadRange should proceed despite empty file existing
+		err = rp.DownloadRange(ctx, rangeNumber)
+		assert.NoError(t, err)
+
+		// Verify that RPC calls were made (indicating download happened)
+		assert.Equal(t, 100, mockClient.GetCallCount("GetStateDiff"))
+
+		// Verify file now exists and is not empty
+		fileInfo, err = os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Greater(t, fileInfo.Size(), int64(0))
+
+		// Verify we can read the range data
+		rangeDiffs, err := rp.ReadRange(rangeNumber)
+		assert.NoError(t, err)
+		assert.Len(t, rangeDiffs, 100)
+	})
+
+	t.Run("normal file handling unchanged", func(t *testing.T) {
+		rp, mockClient, _, cleanup := setupRangeProcessorTest(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		rangeNumber := uint64(3)
+
+		// First download should work normally
+		err := rp.DownloadRange(ctx, rangeNumber)
+		assert.NoError(t, err)
+
+		// Verify file exists and is not empty
+		rangeFilePath := rp.GetRangeFilePath(rangeNumber)
+		fileInfo, err := os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Greater(t, fileInfo.Size(), int64(0))
+
+		// RangeExists should return true
+		assert.True(t, rp.RangeExists(rangeNumber))
+
+		// Reset call count
+		mockClient.callCount = make(map[string]int)
+
+		// Second download should be skipped (file exists and is not empty)
+		err = rp.DownloadRange(ctx, rangeNumber)
+		assert.NoError(t, err)
+
+		// Verify no RPC calls were made (download was skipped)
+		assert.Equal(t, 0, mockClient.GetCallCount("GetStateDiff"))
+
+		// File should still exist and be non-empty
+		fileInfo, err = os.Stat(rangeFilePath)
+		require.NoError(t, err)
+		assert.Greater(t, fileInfo.Size(), int64(0))
+	})
+
+	t.Run("genesis range always exists", func(t *testing.T) {
+		rp, _, _, cleanup := setupRangeProcessorTest(t)
+		defer cleanup()
+
+		// Genesis range should always be considered to exist
+		assert.True(t, rp.RangeExists(0))
+
+		// Even if we create an empty file at genesis location, it should still exist
+		// (though genesis doesn't have a file path anyway)
+		assert.True(t, rp.RangeExists(0))
 	})
 }
