@@ -79,16 +79,17 @@ func (s *Service) Close() {
 func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 	genesis := core.DefaultGenesisBlock()
 
-	accessedAccounts := make(map[string]uint64, len(genesis.Alloc))
+	accessedAccounts := make(map[uint64]map[string]struct{}, len(genesis.Alloc))
+	accessedAccounts[0] = make(map[string]struct{}, len(genesis.Alloc))
 	accessedAccountsType := make(map[string]bool, len(genesis.Alloc))
 	for acc, alloc := range genesis.Alloc {
 		// Check if this genesis account has code (is a contract)
 		isContract := len(alloc.Code) > 0
-		accessedAccounts[acc.String()] = 0
+		accessedAccounts[0][acc.String()] = struct{}{}
 		accessedAccountsType[acc.String()] = isContract
 	}
 
-	return i.repo.UpdateRangeDataInTx(ctx, accessedAccounts, accessedAccountsType, nil, 0)
+	return i.repo.InsertRange(ctx, accessedAccounts, accessedAccountsType, map[uint64]map[string]map[string]struct{}{}, 0)
 }
 
 // ProcessRange processes an entire range of blocks
@@ -262,14 +263,9 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 
 	s.log.Debug("Checking for ranges to process", "last_indexed_range", lastIndexedRange)
 
-	// Special case: process genesis if starting from range 0
-	var sa StateAccess
-	if s.config.ArchiveMode {
-		sa = newStateAccessArchive()
-	} else {
-		sa = newStateAccessLatest()
-	}
+	sa := newStateAccessArchive()
 
+	// Special case: process genesis if starting from range 0
 	if lastIndexedRange == 0 {
 		if err := s.indexer.ProcessRange(ctx, 0, sa, true); err != nil {
 			return fmt.Errorf("could not process genesis range: %w", err)

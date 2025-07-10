@@ -12,17 +12,7 @@ import (
 
 // TODO:
 type Config struct {
-	// Database configuration (PostgreSQL)
-	DBHost     string `mapstructure:"DB_HOST"`
-	DBPort     string `mapstructure:"DB_PORT"`
-	DBUser     string `mapstructure:"DB_USER"`
-	DBPassword string `mapstructure:"DB_PASSWORD"`
-	DBName     string `mapstructure:"DB_NAME"`
-	DBMaxConns int    `mapstructure:"DB_MAX_CONNS"`
-	DBMinConns int    `mapstructure:"DB_MIN_CONNS"`
-
 	// ClickHouse Archive configuration
-	ArchiveMode        bool   `mapstructure:"ARCHIVE_MODE"`
 	ClickHouseHost     string `mapstructure:"CLICKHOUSE_HOST"`
 	ClickHousePort     string `mapstructure:"CLICKHOUSE_PORT"`
 	ClickHouseUser     string `mapstructure:"CLICKHOUSE_USER"`
@@ -181,79 +171,40 @@ func validateConfig(config Config) error {
 	}
 
 	// Validate database configuration based on archive mode
-	if config.ArchiveMode {
-		// ClickHouse validation
-		if config.ClickHouseHost == "" {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_HOST",
-				Message: "ClickHouse host is required when archive mode is enabled",
-			})
-		}
+	// ClickHouse validation
+	if config.ClickHouseHost == "" {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_HOST",
+			Message: "ClickHouse host is required when archive mode is enabled",
+		})
+	}
 
-		if config.ClickHouseDatabase == "" {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_DATABASE",
-				Message: "ClickHouse database name is required when archive mode is enabled",
-			})
-		}
+	if config.ClickHouseDatabase == "" {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_DATABASE",
+			Message: "ClickHouse database name is required when archive mode is enabled",
+		})
+	}
 
-		if config.ClickHouseUser == "" {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_USER",
-				Message: "ClickHouse user is required when archive mode is enabled",
-			})
-		}
-	} else {
-		// PostgreSQL validation
-		if config.DBHost == "" {
-			errors = append(errors, ValidationError{
-				Field:   "DB_HOST",
-				Message: "database host is required",
-			})
-		}
-
-		if config.DBName == "" {
-			errors = append(errors, ValidationError{
-				Field:   "DB_NAME",
-				Message: "database name is required",
-			})
-		}
-
-		if config.DBUser == "" {
-			errors = append(errors, ValidationError{
-				Field:   "DB_USER",
-				Message: "database user is required",
-			})
-		}
+	if config.ClickHouseUser == "" {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_USER",
+			Message: "ClickHouse user is required when archive mode is enabled",
+		})
 	}
 
 	// Port validation based on archive mode
-	if config.ArchiveMode {
-		// ClickHouse port validation
-		if config.ClickHousePort == "" {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_PORT",
-				Message: "ClickHouse port is required when archive mode is enabled",
-			})
-		} else if port, err := strconv.Atoi(config.ClickHousePort); err != nil || port <= 0 || port > 65535 {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_PORT",
-				Message: "ClickHouse port must be a valid port number (1-65535)",
-			})
-		}
-	} else {
-		// PostgreSQL port validation
-		if config.DBPort == "" {
-			errors = append(errors, ValidationError{
-				Field:   "DB_PORT",
-				Message: "database port is required",
-			})
-		} else if port, err := strconv.Atoi(config.DBPort); err != nil || port <= 0 || port > 65535 {
-			errors = append(errors, ValidationError{
-				Field:   "DB_PORT",
-				Message: "database port must be a valid port number (1-65535)",
-			})
-		}
+	// ClickHouse port validation
+	if config.ClickHousePort == "" {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_PORT",
+			Message: "ClickHouse port is required when archive mode is enabled",
+		})
+	} else if port, err := strconv.Atoi(config.ClickHousePort); err != nil || port <= 0 || port > 65535 {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_PORT",
+			Message: "ClickHouse port must be a valid port number (1-65535)",
+		})
 	}
 
 	if config.APIPort <= 0 || config.APIPort > 65535 {
@@ -264,50 +215,26 @@ func validateConfig(config Config) error {
 	}
 
 	// Connection pool validation based on archive mode
-	if config.ArchiveMode {
-		// ClickHouse connection pool validation
-		if config.ClickHouseMaxConns <= 0 {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_MAX_CONNS",
-				Message: "ClickHouse max connections must be greater than 0",
-			})
-		}
+	// ClickHouse connection pool validation
+	if config.ClickHouseMaxConns <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_MAX_CONNS",
+			Message: "ClickHouse max connections must be greater than 0",
+		})
+	}
 
-		if config.ClickHouseMinConns < 0 {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_MIN_CONNS",
-				Message: "ClickHouse min connections must be greater than or equal to 0",
-			})
-		}
+	if config.ClickHouseMinConns < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_MIN_CONNS",
+			Message: "ClickHouse min connections must be greater than or equal to 0",
+		})
+	}
 
-		if config.ClickHouseMinConns > config.ClickHouseMaxConns {
-			errors = append(errors, ValidationError{
-				Field:   "CLICKHOUSE_MIN_CONNS",
-				Message: "ClickHouse min connections cannot be greater than max connections",
-			})
-		}
-	} else {
-		// PostgreSQL connection pool validation
-		if config.DBMaxConns <= 0 {
-			errors = append(errors, ValidationError{
-				Field:   "DB_MAX_CONNS",
-				Message: "database max connections must be greater than 0",
-			})
-		}
-
-		if config.DBMinConns < 0 {
-			errors = append(errors, ValidationError{
-				Field:   "DB_MIN_CONNS",
-				Message: "database min connections must be greater than or equal to 0",
-			})
-		}
-
-		if config.DBMinConns > config.DBMaxConns {
-			errors = append(errors, ValidationError{
-				Field:   "DB_MIN_CONNS",
-				Message: "database min connections cannot be greater than max connections",
-			})
-		}
+	if config.ClickHouseMinConns > config.ClickHouseMaxConns {
+		errors = append(errors, ValidationError{
+			Field:   "CLICKHOUSE_MIN_CONNS",
+			Message: "ClickHouse min connections cannot be greater than max connections",
+		})
 	}
 
 	// Timeout validation
@@ -415,18 +342,6 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
-}
-
-// GetDatabaseConnectionString builds a PostgreSQL connection string
-func (c *Config) GetDatabaseConnectionString() string {
-	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		c.DBUser,
-		c.DBPassword,
-		c.DBHost,
-		c.DBPort,
-		c.DBName,
-	)
 }
 
 // GetClickHouseConnectionString builds a ClickHouse connection string for golang-migrate

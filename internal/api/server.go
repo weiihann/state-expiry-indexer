@@ -168,7 +168,7 @@ func (s *Server) handleGetExtendedAnalytics(w http.ResponseWriter, r *http.Reque
 
 	currentBlock := latestBlockBig.Uint64()
 
-	analytics, err := s.repo.GetExtendedAnalyticsData(r.Context(), expiryBlock, currentBlock)
+	analytics, err := s.repo.GetAnalyticsData(r.Context(), expiryBlock, currentBlock)
 	if err != nil {
 		s.log.Error("Failed to get extended analytics data",
 			"error", err,
@@ -208,7 +208,6 @@ func (s *Server) handleGetSingleAccessAnalytics(w http.ResponseWriter, r *http.R
 
 	analytics, err := s.repo.GetSingleAccessAnalytics(r.Context(), expiryBlock, currentBlock)
 	if err != nil {
-		// Check if this is an advanced analytics error (unsupported in PostgreSQL)
 		if advancedErr, ok := err.(*repository.AdvancedAnalyticsError); ok {
 			s.log.Warn("Advanced analytics not supported",
 				"operation", advancedErr.Operation,
