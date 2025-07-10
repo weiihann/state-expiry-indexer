@@ -42,6 +42,263 @@ type AnalyticsData struct {
 	CompleteExpiry                CompleteExpiryAnalysis                `json:"complete_expiry"`
 }
 
+// Extended analytics data structures for comprehensive state analysis
+// This structure supports all 15 questions and groups related analytics
+type ExtendedAnalyticsData struct {
+	// Basic analytics (backward compatible)
+	Basic AnalyticsData `json:"basic"`
+
+	// Advanced analytics (new categories)
+	SingleAccess  SingleAccessAnalysis  `json:"single_access"`
+	BlockActivity BlockActivityAnalysis `json:"block_activity"`
+	TimeSeries    TimeSeriesAnalysis    `json:"time_series"`
+	StorageVolume StorageVolumeAnalysis `json:"storage_volume"`
+}
+
+// Question 5: How many accounts/storage slots are only accessed once?
+type SingleAccessAnalysis struct {
+	AccountsSingleAccess SingleAccessAccountsAnalysis `json:"accounts_single_access"`
+	StorageSingleAccess  SingleAccessStorageAnalysis  `json:"storage_single_access"`
+}
+
+type SingleAccessAccountsAnalysis struct {
+	SingleAccessEOAs         int     `json:"single_access_eoas"`
+	SingleAccessContracts    int     `json:"single_access_contracts"`
+	TotalSingleAccess        int     `json:"total_single_access"`
+	TotalEOAs                int     `json:"total_eoas"`
+	TotalContracts           int     `json:"total_contracts"`
+	TotalAccounts            int     `json:"total_accounts"`
+	SingleAccessEOARate      float64 `json:"single_access_eoa_rate"`
+	SingleAccessContractRate float64 `json:"single_access_contract_rate"`
+	SingleAccessRate         float64 `json:"single_access_rate"`
+}
+
+type SingleAccessStorageAnalysis struct {
+	SingleAccessSlots int     `json:"single_access_slots"`
+	TotalSlots        int     `json:"total_slots"`
+	SingleAccessRate  float64 `json:"single_access_rate"`
+}
+
+// Questions 6, 13: Block activity analysis
+type BlockActivityAnalysis struct {
+	TopActivityBlocks  []BlockActivityInfo `json:"top_activity_blocks"`
+	BlockAccessRates   BlockAccessRates    `json:"block_access_rates"`
+	ActivityStatistics ActivityStatistics  `json:"activity_statistics"`
+	BlockRangeAnalysis []BlockRangeInfo    `json:"block_range_analysis"`
+}
+
+type BlockActivityInfo struct {
+	BlockNumber        uint64 `json:"block_number"`
+	AccountAccesses    int    `json:"account_accesses"`
+	StorageAccesses    int    `json:"storage_accesses"`
+	TotalAccesses      int    `json:"total_accesses"`
+	EOAAccesses        int    `json:"eoa_accesses"`
+	ContractAccesses   int    `json:"contract_accesses"`
+	UniqueAccounts     int    `json:"unique_accounts"`
+	UniqueStorageSlots int    `json:"unique_storage_slots"`
+}
+
+type BlockAccessRates struct {
+	AccountsPerBlock      float64 `json:"accounts_per_block"`
+	StoragePerBlock       float64 `json:"storage_per_block"`
+	TotalAccessesPerBlock float64 `json:"total_accesses_per_block"`
+	BlocksAnalyzed        int     `json:"blocks_analyzed"`
+	AverageBlockInterval  float64 `json:"average_block_interval"`
+}
+
+type ActivityStatistics struct {
+	MostActiveBlock   uint64  `json:"most_active_block"`
+	LeastActiveBlock  uint64  `json:"least_active_block"`
+	MaxAccesses       int     `json:"max_accesses"`
+	MinAccesses       int     `json:"min_accesses"`
+	AverageAccesses   float64 `json:"average_accesses"`
+	MedianAccesses    float64 `json:"median_accesses"`
+	StandardDeviation float64 `json:"standard_deviation"`
+}
+
+type BlockRangeInfo struct {
+	RangeStart       uint64  `json:"range_start"`
+	RangeEnd         uint64  `json:"range_end"`
+	BlockCount       int     `json:"block_count"`
+	AccountAccesses  int     `json:"account_accesses"`
+	StorageAccesses  int     `json:"storage_accesses"`
+	TotalAccesses    int     `json:"total_accesses"`
+	AccessesPerBlock float64 `json:"accesses_per_block"`
+}
+
+// Questions 12, 14: Time series analysis
+type TimeSeriesAnalysis struct {
+	AccessTrends      AccessTrendsAnalysis    `json:"access_trends"`
+	FrequencyAnalysis FrequencyAnalysisData   `json:"frequency_analysis"`
+	TrendStatistics   TrendStatisticsAnalysis `json:"trend_statistics"`
+	TimeWindows       []TimeWindowAnalysis    `json:"time_windows"`
+}
+
+type AccessTrendsAnalysis struct {
+	EOATrend       []TimePoint    `json:"eoa_trend"`
+	ContractTrend  []TimePoint    `json:"contract_trend"`
+	StorageTrend   []TimePoint    `json:"storage_trend"`
+	TotalTrend     []TimePoint    `json:"total_trend"`
+	TrendDirection TrendDirection `json:"trend_direction"`
+}
+
+type TimePoint struct {
+	BlockNumber     uint64  `json:"block_number"`
+	Timestamp       uint64  `json:"timestamp,omitempty"`
+	AccessCount     int     `json:"access_count"`
+	CumulativeCount int     `json:"cumulative_count"`
+	GrowthRate      float64 `json:"growth_rate"`
+}
+
+type TrendDirection struct {
+	EOATrend      string  `json:"eoa_trend"` // "increasing", "decreasing", "stable"
+	ContractTrend string  `json:"contract_trend"`
+	StorageTrend  string  `json:"storage_trend"`
+	TotalTrend    string  `json:"total_trend"`
+	OverallGrowth float64 `json:"overall_growth"`
+}
+
+type FrequencyAnalysisData struct {
+	AccountFrequency AccountFrequencyAnalysis `json:"account_frequency"`
+	StorageFrequency StorageFrequencyAnalysis `json:"storage_frequency"`
+	OverallFrequency OverallFrequencyAnalysis `json:"overall_frequency"`
+}
+
+type AccountFrequencyAnalysis struct {
+	AverageAccessFrequency float64                       `json:"average_access_frequency"`
+	MedianAccessFrequency  float64                       `json:"median_access_frequency"`
+	FrequencyDistribution  []FrequencyDistributionBucket `json:"frequency_distribution"`
+	MostFrequentAccounts   []FrequentAccountInfo         `json:"most_frequent_accounts"`
+}
+
+type StorageFrequencyAnalysis struct {
+	AverageAccessFrequency float64                       `json:"average_access_frequency"`
+	MedianAccessFrequency  float64                       `json:"median_access_frequency"`
+	FrequencyDistribution  []FrequencyDistributionBucket `json:"frequency_distribution"`
+	MostFrequentSlots      []FrequentStorageInfo         `json:"most_frequent_slots"`
+}
+
+type OverallFrequencyAnalysis struct {
+	TotalUniqueAccounts int     `json:"total_unique_accounts"`
+	TotalUniqueSlots    int     `json:"total_unique_slots"`
+	TotalAccessEvents   int     `json:"total_access_events"`
+	AverageAccountReuse float64 `json:"average_account_reuse"`
+	AverageStorageReuse float64 `json:"average_storage_reuse"`
+	SystemUtilization   float64 `json:"system_utilization"`
+}
+
+type FrequencyDistributionBucket struct {
+	FrequencyRange string  `json:"frequency_range"`
+	Count          int     `json:"count"`
+	Percentage     float64 `json:"percentage"`
+}
+
+type FrequentAccountInfo struct {
+	Address     string `json:"address"`
+	AccessCount int    `json:"access_count"`
+	IsContract  bool   `json:"is_contract"`
+	FirstAccess uint64 `json:"first_access"`
+	LastAccess  uint64 `json:"last_access"`
+	AccessSpan  uint64 `json:"access_span"`
+}
+
+type FrequentStorageInfo struct {
+	Address     string `json:"address"`
+	StorageSlot string `json:"storage_slot"`
+	AccessCount int    `json:"access_count"`
+	FirstAccess uint64 `json:"first_access"`
+	LastAccess  uint64 `json:"last_access"`
+	AccessSpan  uint64 `json:"access_span"`
+}
+
+type TrendStatisticsAnalysis struct {
+	GrowthRate       float64 `json:"growth_rate"`
+	Volatility       float64 `json:"volatility"`
+	SeasonalityIndex float64 `json:"seasonality_index"`
+	PeakActivity     uint64  `json:"peak_activity"`
+	LowActivity      uint64  `json:"low_activity"`
+	TrendStartBlock  uint64  `json:"trend_start_block"`
+	TrendEndBlock    uint64  `json:"trend_end_block"`
+}
+
+type TimeWindowAnalysis struct {
+	WindowStart     uint64  `json:"window_start"`
+	WindowEnd       uint64  `json:"window_end"`
+	WindowSize      int     `json:"window_size"`
+	AccountAccesses int     `json:"account_accesses"`
+	StorageAccesses int     `json:"storage_accesses"`
+	TotalAccesses   int     `json:"total_accesses"`
+	AccessRate      float64 `json:"access_rate"`
+	GrowthFromPrev  float64 `json:"growth_from_prev"`
+}
+
+// Questions 10, 15: Storage volume analysis
+type StorageVolumeAnalysis struct {
+	StorageDistribution StorageDistributionAnalysis `json:"storage_distribution"`
+	ContractRankings    ContractRankingsAnalysis    `json:"contract_rankings"`
+	VolumeStatistics    VolumeStatisticsAnalysis    `json:"volume_statistics"`
+	ActivityAnalysis    StorageActivityAnalysis     `json:"activity_analysis"`
+}
+
+type StorageDistributionAnalysis struct {
+	TotalStorageSlots    int                        `json:"total_storage_slots"`
+	ActiveStorageSlots   int                        `json:"active_storage_slots"`
+	ExpiredStorageSlots  int                        `json:"expired_storage_slots"`
+	VolumeDistribution   []VolumeDistributionBucket `json:"volume_distribution"`
+	ContractsWithStorage int                        `json:"contracts_with_storage"`
+	ContractsAllActive   int                        `json:"contracts_all_active"`
+	ContractsAllExpired  int                        `json:"contracts_all_expired"`
+	ContractsMixed       int                        `json:"contracts_mixed"`
+}
+
+type VolumeDistributionBucket struct {
+	StorageRange string  `json:"storage_range"`
+	Count        int     `json:"count"`
+	Percentage   float64 `json:"percentage"`
+}
+
+type ContractRankingsAnalysis struct {
+	TopContractsByTotalSlots   []ContractVolumeInfo `json:"top_contracts_by_total_slots"`
+	TopContractsByActiveSlots  []ContractVolumeInfo `json:"top_contracts_by_active_slots"`
+	TopContractsByExpiredSlots []ContractVolumeInfo `json:"top_contracts_by_expired_slots"`
+	ContractsAllActiveStorage  []ContractVolumeInfo `json:"contracts_all_active_storage"`
+}
+
+type ContractVolumeInfo struct {
+	Address            string  `json:"address"`
+	TotalSlots         int     `json:"total_slots"`
+	ActiveSlots        int     `json:"active_slots"`
+	ExpiredSlots       int     `json:"expired_slots"`
+	ActivityPercentage float64 `json:"activity_percentage"`
+	FirstAccess        uint64  `json:"first_access"`
+	LastAccess         uint64  `json:"last_access"`
+	IsActive           bool    `json:"is_active"`
+}
+
+type VolumeStatisticsAnalysis struct {
+	AverageStoragePerContract float64 `json:"average_storage_per_contract"`
+	MedianStoragePerContract  float64 `json:"median_storage_per_contract"`
+	MaxStoragePerContract     int     `json:"max_storage_per_contract"`
+	MinStoragePerContract     int     `json:"min_storage_per_contract"`
+	StorageConcentration      float64 `json:"storage_concentration"`
+	StorageUtilization        float64 `json:"storage_utilization"`
+}
+
+type StorageActivityAnalysis struct {
+	ActiveStorageRate    float64              `json:"active_storage_rate"`
+	StorageReuseRate     float64              `json:"storage_reuse_rate"`
+	StorageChurnRate     float64              `json:"storage_churn_rate"`
+	AverageStorageAge    float64              `json:"average_storage_age"`
+	StorageLifespanStats StorageLifespanStats `json:"storage_lifespan_stats"`
+}
+
+type StorageLifespanStats struct {
+	AverageLifespan uint64 `json:"average_lifespan"`
+	MedianLifespan  uint64 `json:"median_lifespan"`
+	MaxLifespan     uint64 `json:"max_lifespan"`
+	MinLifespan     uint64 `json:"min_lifespan"`
+}
+
 // Question 1: How many accounts are expired (separated by EOA and contract)?
 type AccountExpiryAnalysis struct {
 	ExpiredEOAs               int     `json:"expired_eoas"`
@@ -128,6 +385,16 @@ type PostgreSQLRepository struct {
 
 // Ensure PostgreSQLRepository implements StateRepositoryInterface
 var _ StateRepositoryInterface = (*PostgreSQLRepository)(nil)
+
+// PostgreSQLRepositoryInterface extends StateRepositoryInterface with PostgreSQL-specific methods
+type PostgreSQLRepositoryInterface interface {
+	StateRepositoryInterface
+	// PostgreSQL still supports the legacy analytics method
+	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error)
+}
+
+// Ensure PostgreSQLRepository implements PostgreSQLRepositoryInterface
+var _ PostgreSQLRepositoryInterface = (*PostgreSQLRepository)(nil)
 
 func NewPostgreSQLRepository(db *pgxpool.Pool) *PostgreSQLRepository {
 	return &PostgreSQLRepository{db: db}
@@ -863,111 +1130,7 @@ func (r *PostgreSQLRepository) getExpiryDistributionBuckets(ctx context.Context,
 	return buckets, rows.Err()
 }
 
-// Question 8: How many contracts are still active but have expired storage? (Detailed threshold analysis)
-// NOTE: This function is temporarily disabled due to memory issues with large datasets.
-// The GetAnalyticsData method now returns empty data for this section.
-func (r *PostgreSQLRepository) getActiveContractsExpiredStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ActiveContractsExpiredStorageAnalysis) error {
-	// Memory-efficient approach: Avoid JOIN by using subqueries and window functions
-	thresholdQuery := `
-		WITH contract_storage_stats AS (
-			SELECT 
-				s.address,
-				COUNT(s.slot_key) as total_slots,
-				COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1) as expired_slots,
-				(COUNT(s.slot_key) FILTER (WHERE s.last_access_block < $1)::float / COUNT(s.slot_key)::float * 100) as expiry_percentage
-			FROM storage_current s
-			WHERE EXISTS (
-				SELECT 1 FROM accounts_current a 
-				WHERE a.address = s.address 
-				AND a.is_contract = true 
-				AND a.last_access_block >= $1
-			)
-			GROUP BY s.address
-		),
-		threshold_buckets AS (
-			SELECT 
-				CASE 
-					WHEN expiry_percentage = 0 THEN '0%'
-					WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN '1-20%'
-					WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN '21-50%'
-					WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN '51-80%'
-					WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN '81-99%'
-					ELSE '100%'
-				END as threshold_range
-			FROM contract_storage_stats
-		)
-		SELECT 
-			threshold_range,
-			COUNT(*) as active_contract_count
-		FROM threshold_buckets
-		GROUP BY threshold_range
-		ORDER BY 
-			CASE threshold_range
-				WHEN '0%' THEN 1
-				WHEN '1-20%' THEN 2
-				WHEN '21-50%' THEN 3
-				WHEN '51-80%' THEN 4
-				WHEN '81-99%' THEN 5
-				WHEN '100%' THEN 6
-			END
-	`
-
-	// Get total active contracts count first - optimized to avoid JOIN and GROUP BY
-	totalActiveQuery := `
-		SELECT COUNT(DISTINCT a.address) as total_active_contracts
-		FROM accounts_current a
-		WHERE a.is_contract = true 
-		  AND a.last_access_block >= $1
-		  AND EXISTS (
-			  SELECT 1 FROM storage_current s 
-			  WHERE s.address = a.address
-		  )
-	`
-
-	var totalActiveContracts int
-	err := r.db.QueryRow(ctx, totalActiveQuery, expiryBlock).Scan(&totalActiveContracts)
-	if err != nil {
-		return fmt.Errorf("could not get total active contracts: %w", err)
-	}
-
-	// Get threshold analysis rows (memory efficient)
-	rows, err := r.db.Query(ctx, thresholdQuery, expiryBlock)
-	if err != nil {
-		return fmt.Errorf("could not query threshold analysis: %w", err)
-	}
-	defer rows.Close()
-
-	var thresholdAnalysis []ExpiredStorageThreshold
-	for rows.Next() {
-		var threshold ExpiredStorageThreshold
-		var contractCount int
-
-		err := rows.Scan(&threshold.ThresholdRange, &contractCount)
-		if err != nil {
-			return fmt.Errorf("could not scan threshold row: %w", err)
-		}
-
-		threshold.ContractCount = contractCount
-		// Calculate percentage of active contracts
-		if totalActiveContracts > 0 {
-			threshold.PercentageOfActive = float64(contractCount) / float64(totalActiveContracts) * 100
-		} else {
-			threshold.PercentageOfActive = 0
-		}
-
-		thresholdAnalysis = append(thresholdAnalysis, threshold)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error iterating threshold rows: %w", err)
-	}
-
-	result.ThresholdAnalysis = thresholdAnalysis
-	result.TotalActiveContracts = totalActiveContracts
-	return nil
-}
-
-// Question 9: How many contracts are fully expired at both account and storage levels?
+// getCompleteExpiryAnalysis gets complete expiry analysis for contracts
 func (r *PostgreSQLRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
 	query := `
 		WITH fully_expired_storage_contracts AS (
@@ -1008,8 +1171,7 @@ func (r *PostgreSQLRepository) getCompleteExpiryAnalysis(ctx context.Context, ex
 	return nil
 }
 
-// UpdateRangeDataWithAllEventsInTx converts slice-based data to map format and calls existing method
-// This method is provided for interface compatibility but PostgreSQL mode uses deduplication
+// UpdateRangeDataWithAllEventsInTx is provided for interface compatibility but PostgreSQL mode uses deduplication
 func (r *PostgreSQLRepository) UpdateRangeDataWithAllEventsInTx(
 	ctx context.Context,
 	accountAccesses map[uint64]map[string]struct{},
@@ -1018,4 +1180,77 @@ func (r *PostgreSQLRepository) UpdateRangeDataWithAllEventsInTx(
 	rangeNumber uint64,
 ) error {
 	return fmt.Errorf("archive mode with all events is not supported in PostgreSQL - use ClickHouse with --archive flag instead")
+}
+
+// Extended analytics methods - PostgreSQL returns structured errors for unsupported operations
+
+// GetExtendedAnalyticsData returns extended analytics data (PostgreSQL: returns basic analytics only)
+func (r *PostgreSQLRepository) GetExtendedAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error) {
+	// For PostgreSQL, we return the basic analytics and empty advanced analytics
+	basicAnalytics, err := r.GetAnalyticsData(ctx, expiryBlock, currentBlock)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get basic analytics: %w", err)
+	}
+
+	return &ExtendedAnalyticsData{
+		Basic: *basicAnalytics,
+		SingleAccess: SingleAccessAnalysis{
+			AccountsSingleAccess: SingleAccessAccountsAnalysis{},
+			StorageSingleAccess:  SingleAccessStorageAnalysis{},
+		},
+		BlockActivity: BlockActivityAnalysis{
+			TopActivityBlocks:  []BlockActivityInfo{},
+			BlockAccessRates:   BlockAccessRates{},
+			ActivityStatistics: ActivityStatistics{},
+			BlockRangeAnalysis: []BlockRangeInfo{},
+		},
+		TimeSeries: TimeSeriesAnalysis{
+			AccessTrends:      AccessTrendsAnalysis{},
+			FrequencyAnalysis: FrequencyAnalysisData{},
+			TrendStatistics:   TrendStatisticsAnalysis{},
+			TimeWindows:       []TimeWindowAnalysis{},
+		},
+		StorageVolume: StorageVolumeAnalysis{
+			StorageDistribution: StorageDistributionAnalysis{},
+			ContractRankings:    ContractRankingsAnalysis{},
+			VolumeStatistics:    VolumeStatisticsAnalysis{},
+			ActivityAnalysis:    StorageActivityAnalysis{},
+		},
+	}, nil
+}
+
+// GetSingleAccessAnalytics returns single access analytics (PostgreSQL: not supported)
+func (r *PostgreSQLRepository) GetSingleAccessAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*SingleAccessAnalysis, error) {
+	return nil, NewAdvancedAnalyticsError(
+		"GetSingleAccessAnalytics",
+		"PostgreSQL",
+		"Single access analytics requires archive mode data. Use ClickHouse with --archive flag for advanced analytics.",
+	)
+}
+
+// GetBlockActivityAnalytics returns block activity analytics (PostgreSQL: not supported)
+func (r *PostgreSQLRepository) GetBlockActivityAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, topN int) (*BlockActivityAnalysis, error) {
+	return nil, NewAdvancedAnalyticsError(
+		"GetBlockActivityAnalytics",
+		"PostgreSQL",
+		"Block activity analytics requires historical block data. Use ClickHouse with --archive flag for advanced analytics.",
+	)
+}
+
+// GetTimeSeriesAnalytics returns time series analytics (PostgreSQL: not supported)
+func (r *PostgreSQLRepository) GetTimeSeriesAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, windowSize int) (*TimeSeriesAnalysis, error) {
+	return nil, NewAdvancedAnalyticsError(
+		"GetTimeSeriesAnalytics",
+		"PostgreSQL",
+		"Time series analytics requires historical access data. Use ClickHouse with --archive flag for advanced analytics.",
+	)
+}
+
+// GetStorageVolumeAnalytics returns storage volume analytics (PostgreSQL: not supported)
+func (r *PostgreSQLRepository) GetStorageVolumeAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64, topN int) (*StorageVolumeAnalysis, error) {
+	return nil, NewAdvancedAnalyticsError(
+		"GetStorageVolumeAnalytics",
+		"PostgreSQL",
+		"Advanced storage volume analytics requires archive mode data. Use ClickHouse with --archive flag for advanced analytics.",
+	)
 }
