@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/weiihann/state-expiry-indexer/db"
 	"github.com/weiihann/state-expiry-indexer/internal"
@@ -28,9 +29,35 @@ type StateRepositoryInterface interface {
 		rangeNumber uint64,
 	) error
 
-	// API query methods (used by API server)
+	// Basic API query methods (used by API server)
 	GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
-	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*AnalyticsData, error)
+
+	// Extended analytics methods for comprehensive state analysis
+	GetExtendedAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error)
+	GetSingleAccessAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*SingleAccessAnalysis, error)
+	GetBlockActivityAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, topN int) (*BlockActivityAnalysis, error)
+	GetTimeSeriesAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, windowSize int) (*TimeSeriesAnalysis, error)
+	GetStorageVolumeAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64, topN int) (*StorageVolumeAnalysis, error)
+}
+
+// AdvancedAnalyticsError represents errors for unsupported advanced analytics operations
+type AdvancedAnalyticsError struct {
+	Operation string
+	Message   string
+	Database  string
+}
+
+func (e *AdvancedAnalyticsError) Error() string {
+	return fmt.Sprintf("advanced analytics operation '%s' not supported in %s: %s", e.Operation, e.Database, e.Message)
+}
+
+// NewAdvancedAnalyticsError creates a new error for unsupported operations
+func NewAdvancedAnalyticsError(operation, database, message string) *AdvancedAnalyticsError {
+	return &AdvancedAnalyticsError{
+		Operation: operation,
+		Database:  database,
+		Message:   message,
+	}
 }
 
 // NewRepository creates the appropriate repository implementation based on configuration
