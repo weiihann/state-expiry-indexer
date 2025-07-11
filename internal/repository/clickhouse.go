@@ -508,7 +508,7 @@ func (r *ClickHouseRepository) GetContractAnalytics(ctx context.Context, params 
 	}
 
 	// Get contract volume analysis
-	volumeAnalysis, err := r.getContractVolumeAnalysis(ctx, params)
+	volumeAnalysis, err := r.getContractVolumeAnalysis(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not get contract volume analysis: %w", err)
 	}
@@ -545,17 +545,17 @@ func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params Q
 			max(last_access_block) as max_access_block
 		FROM storage_state
 		GROUP BY address, slot_key
-	),
+	)
 	SELECT 
-		lower(hex(s.address)) as address,
+		lower(hex(address)) as address,
 		COUNT(*) as total_slots,
-		countIf(s.max_access_block < ?) as expired_slots,
-		countIf(s.max_access_block >= ?) as active_slots,
-		(countIf(s.max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
-		s.max_access_block as last_access,
-		any(a.max_access_block >= ?) as is_account_active
-	FROM collapsed_storage s
-	GROUP BY s.address
+		countIf(max_access_block < ?) as expired_slots,
+		countIf(max_access_block >= ?) as active_slots,
+		(countIf(max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
+		max(max_access_block) as last_access,
+		any(max_access_block >= ?) as is_account_active
+	FROM collapsed_storage
+	GROUP BY address
 	HAVING expired_slots > 0
 	ORDER BY expired_slots DESC, expiry_percentage DESC
 	LIMIT ?
@@ -591,17 +591,17 @@ func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params Q
 			max(last_access_block) as max_access_block
 		FROM storage_state
 		GROUP BY address, slot_key
-	),
+	)
 	SELECT 
-		lower(hex(s.address)) as address,
+		lower(hex(address)) as address,
 		COUNT(*) as total_slots,
-		countIf(s.max_access_block < ?) as expired_slots,
-		countIf(s.max_access_block >= ?) as active_slots,
-		(countIf(s.max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
-		s.max_access_block as last_access,
-		any(a.max_access_block >= ?) as is_account_active
-	FROM collapsed_storage s
-	GROUP BY s.address
+		countIf(max_access_block < ?) as expired_slots,
+		countIf(max_access_block >= ?) as active_slots,
+		(countIf(max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
+		max(max_access_block) as last_access,
+		any(max_access_block >= ?) as is_account_active
+	FROM collapsed_storage
+	GROUP BY address
 	ORDER BY total_slots DESC
 	LIMIT ?
 	`
@@ -743,7 +743,7 @@ func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context,
 }
 
 // getContractVolumeAnalysis gets contract volume analysis
-func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, params QueryParams) (ContractVolumeAnalysis, error) {
+func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context) (ContractVolumeAnalysis, error) {
 	query := `
 	WITH 
 	collapsed_storage AS (
@@ -754,7 +754,7 @@ func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, pa
 		FROM storage_state
 		GROUP BY address, slot_key
 	),
-	WITH contract_storage_counts AS (
+	contract_storage_counts AS (
 		SELECT 
 			address,
 			COUNT(*) as slot_count
@@ -792,7 +792,15 @@ func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, pa
 // getContractStatusAnalysis gets contract status analysis
 func (r *ClickHouseRepository) getContractStatusAnalysis(ctx context.Context, params QueryParams) (ContractStatusAnalysis, error) {
 	query := `
-	WITH 
+	WITH
+	collapsed_accounts AS (
+		SELECT
+			address,
+			argMax(is_contract, last_access_block) AS is_contract,
+			max(last_access_block)                 AS max_access_block
+		FROM accounts_state
+		GROUP BY address
+	),
 	collapsed_storage AS (
 		SELECT
 			address,
@@ -801,13 +809,14 @@ func (r *ClickHouseRepository) getContractStatusAnalysis(ctx context.Context, pa
 		FROM storage_state
 		GROUP BY address, slot_key
 	),
-	WITH contract_status AS (
+	contract_status AS (
 		SELECT 
 			s.address,
 			COUNT(*) as total_slots,
 			countIf(s.max_access_block < ?) as expired_slots,
 			any(a.max_access_block >= ?) as account_active
 		FROM collapsed_storage s
+		JOIN collapsed_accounts a ON s.address = a.address
 		GROUP BY s.address
 	)
 	SELECT 
