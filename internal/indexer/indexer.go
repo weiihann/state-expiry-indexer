@@ -8,7 +8,6 @@ import (
 	"time"
 
 	core "github.com/ethereum/go-ethereum/core"
-	"github.com/hashicorp/golang-lru/v2"
 	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
@@ -26,7 +25,7 @@ type Indexer struct {
 	rpcClient      rpc.ClientInterface
 	config         internal.Config
 	log            *slog.Logger
-	accountType    *lru.Cache[string, bool] // address -> isContract
+	accountCache   *AccountCache
 }
 
 type Service struct {
@@ -38,19 +37,21 @@ type Service struct {
 }
 
 func NewIndexer(repo repository.StateRepositoryInterface, rangeProcessor *storage.RangeProcessor, rpcClient rpc.ClientInterface, config internal.Config) *Indexer {
-	accountType, _ := lru.New[string, bool](50000000)
-
 	return &Indexer{
 		repo:           repo,
 		rangeProcessor: rangeProcessor,
 		rpcClient:      rpcClient,
 		config:         config,
 		log:            logger.GetLogger("indexer"),
-		accountType:    accountType,
+		accountCache:   NewAccountCache(),
 	}
 }
 
-func NewService(repo repository.StateRepositoryInterface, rpcClient rpc.ClientInterface, config internal.Config) *Service {
+func NewService(
+	repo repository.StateRepositoryInterface,
+	rpcClient rpc.ClientInterface,
+	config internal.Config,
+) *Service {
 	log := logger.GetLogger("indexer-service")
 
 	// Initialize range processor
@@ -217,14 +218,14 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 
 // determineAccountType analyzes the account diff to determine if it's a contract
 func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff rpc.AccountDiff) bool {
-	if isContract, ok := i.accountType.Get(addr); ok {
+	if isContract, ok := i.accountCache.Get(addr); ok {
 		return isContract
 	}
 
 	// If the account has code changes, it's definitely a contract
 	if diff.Code != nil {
 		if _, ok := diff.Code.(map[string]any); ok {
-			i.accountType.Add(addr, true)
+			i.accountCache.Set(addr, true)
 			return true
 		}
 	}
@@ -232,7 +233,7 @@ func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNu
 	// If the account has storage changes, it's definitely a contract
 	if diff.Storage != nil {
 		if st, ok := diff.Storage.(map[string]any); ok && len(st) > 0 {
-			i.accountType.Add(addr, true)
+			i.accountCache.Set(addr, true)
 			return true
 		}
 	}
@@ -243,11 +244,11 @@ func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNu
 		return false
 	}
 	if len(code) > 2 { // Omit the 0x prefix
-		i.accountType.Add(addr, true)
+		i.accountCache.Set(addr, true)
 		return true
 	}
 
-	i.accountType.Add(addr, false)
+	i.accountCache.Set(addr, false)
 	return false
 }
 
