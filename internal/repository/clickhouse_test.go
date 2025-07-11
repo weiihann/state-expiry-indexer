@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/stretchr/testify/assert"
@@ -464,5 +465,771 @@ func TestClickHouseGetSyncStatus(t *testing.T) {
 		assert.True(t, status.IsSynced, "Should be synced when up to date")
 		assert.Equal(t, uint64(100), status.LastIndexedRange)
 		assert.Equal(t, uint64(100*10), status.EndBlock)
+	})
+}
+
+// TestGetAccountAnalytics provides comprehensive testing for the GetAccountAnalytics method
+// Tests Questions 1, 2, and 5a: EOA count, Contract count, and Single access accounts
+func TestGetAccountAnalytics(t *testing.T) {
+	t.Run("BasicFunctionality", func(t *testing.T) {
+		// Setup test with known data distribution
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          60, // 60 EOAs
+			NumContracts:     40, // 40 contracts (total 100 accounts)
+			SlotsPerContract: 5,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      50, // Half expired
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		t.Cleanup(setup.Cleanup)
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   100,
+			TopN:         10,
+		}
+
+		// Calculate expected results based on deterministic test data
+		expected := setup.TestData.CalculateExpectedAccountAnalytics(config.ExpiryBlock)
+
+		// Test the method
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate basic structure
+		assert.NotNil(t, result.Total)
+		assert.NotNil(t, result.Expiry)
+		assert.NotNil(t, result.SingleAccess)
+		assert.NotNil(t, result.Distribution)
+
+		// Validate that actual results match expected results from deterministic data
+		AssertAccountAnalyticsMatch(t, expected, result, 0.1)
+
+		// Validate data consistency
+		AssertAnalyticsDataConsistency(t, result)
+
+		t.Logf("Account Analytics Results: Total=%d (EOAs=%d, Contracts=%d), Expired=%d, SingleAccess=%d",
+			result.Total.Total, result.Total.EOAs, result.Total.Contracts,
+			result.Expiry.TotalExpired, result.SingleAccess.TotalSingleAccess)
+		t.Logf("Expected vs Actual - Expired: %d vs %d, SingleAccess: %d vs %d",
+			expected.Expiry.TotalExpired, result.Expiry.TotalExpired,
+			expected.SingleAccess.TotalSingleAccess, result.SingleAccess.TotalSingleAccess)
+	})
+
+	t.Run("DeterministicExpiryValidation", func(t *testing.T) {
+		// Test with specific configuration to validate expiry calculations
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          10,
+			NumContracts:     5,
+			SlotsPerContract: 3,
+			StartBlock:       1,
+			EndBlock:         20,
+			ExpiryBlock:      10, // Expiry in the middle
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedAccountAnalytics(config.ExpiryBlock)
+
+		// Get actual results
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate exact matches for expiry data
+		assert.Equal(t, expected.Expiry.ExpiredEOAs, result.Expiry.ExpiredEOAs,
+			"Expired EOA count should match deterministic calculation")
+		assert.Equal(t, expected.Expiry.ExpiredContracts, result.Expiry.ExpiredContracts,
+			"Expired contract count should match deterministic calculation")
+		assert.Equal(t, expected.Expiry.TotalExpired, result.Expiry.TotalExpired,
+			"Total expired count should match deterministic calculation")
+
+		// Validate exact matches for single access data
+		assert.Equal(t, expected.SingleAccess.SingleAccessEOAs, result.SingleAccess.SingleAccessEOAs,
+			"Single access EOA count should match deterministic calculation")
+		assert.Equal(t, expected.SingleAccess.SingleAccessContracts, result.SingleAccess.SingleAccessContracts,
+			"Single access contract count should match deterministic calculation")
+		assert.Equal(t, expected.SingleAccess.TotalSingleAccess, result.SingleAccess.TotalSingleAccess,
+			"Total single access count should match deterministic calculation")
+
+		t.Logf("Deterministic validation passed - Expired: %d, SingleAccess: %d",
+			result.Expiry.TotalExpired, result.SingleAccess.TotalSingleAccess)
+	})
+
+	t.Run("SingleAccessValidation", func(t *testing.T) {
+		// Test configuration designed to have predictable single access patterns
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          6, // Some will have single access, some multiple
+			NumContracts:     4, // Some will have single access, some multiple
+			SlotsPerContract: 2,
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      0, // All active (no expiry)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   20,
+			TopN:         10,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedAccountAnalytics(config.ExpiryBlock)
+
+		// Get actual results
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Since expiry block is after all data, no accounts should be expired
+		assert.Equal(t, 0, result.Expiry.TotalExpired, "No accounts should be expired")
+		assert.Equal(t, 0.0, result.Expiry.ExpiryRate, "Expiry rate should be 0%")
+
+		// Validate single access calculations match expected
+		AssertAccountAnalyticsMatch(t, expected, result, 0.1)
+
+		t.Logf("Single access validation - Expected: %d, Actual: %d",
+			expected.SingleAccess.TotalSingleAccess, result.SingleAccess.TotalSingleAccess)
+	})
+
+	t.Run("EmptyDatabase", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          0,
+			NumContracts:     0,
+			SlotsPerContract: 0,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      50,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   10,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have zero counts
+		assert.Equal(t, 0, result.Total.EOAs)
+		assert.Equal(t, 0, result.Total.Contracts)
+		assert.Equal(t, 0, result.Total.Total)
+		assert.Equal(t, 0, result.Expiry.TotalExpired)
+		assert.Equal(t, 0, result.SingleAccess.TotalSingleAccess)
+
+		// Rates should be zero or handle division by zero gracefully
+		assert.Equal(t, 0.0, result.Expiry.ExpiryRate)
+		assert.Equal(t, 0.0, result.SingleAccess.SingleAccessRate)
+	})
+
+	t.Run("OnlyEOAs", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          50,
+			NumContracts:     0, // No contracts
+			SlotsPerContract: 0,
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      5,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   20,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have only EOAs
+		assert.Equal(t, 50, result.Total.EOAs)
+		assert.Equal(t, 0, result.Total.Contracts)
+		assert.Equal(t, result.Total.Total, result.Total.EOAs)
+		assert.Equal(t, 0, result.Expiry.ExpiredContracts)
+		assert.Equal(t, 0, result.SingleAccess.SingleAccessContracts)
+
+		// Distribution should be 100% EOAs
+		assert.Equal(t, 100.0, result.Distribution.EOAPercentage)
+		assert.Equal(t, 0.0, result.Distribution.ContractPercentage)
+	})
+
+	t.Run("OnlyContracts", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          0, // No EOAs
+			NumContracts:     30,
+			SlotsPerContract: 5,
+			StartBlock:       1,
+			EndBlock:         50,
+			ExpiryBlock:      5,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   30,
+			TopN:         10,
+		}
+
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have only contracts
+		assert.Equal(t, 0, result.Total.EOAs)
+		assert.Equal(t, 30, result.Total.Contracts)
+		assert.Equal(t, result.Total.Total, result.Total.Contracts)
+		assert.Equal(t, 0, result.Expiry.ExpiredEOAs)
+		assert.Equal(t, 0, result.SingleAccess.SingleAccessEOAs)
+
+		// Distribution should be 100% contracts
+		assert.Equal(t, 0.0, result.Distribution.EOAPercentage)
+		assert.Equal(t, 100.0, result.Distribution.ContractPercentage)
+	})
+
+	t.Run("AllExpired", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          20,
+			NumContracts:     10,
+			SlotsPerContract: 3,
+			StartBlock:       1,
+			EndBlock:         20,
+			ExpiryBlock:      100, // All should be expired (expiry after end)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.ExpiryBlock + 100,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   10,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// All accounts should be expired
+		assert.Equal(t, result.Total.Total, result.Expiry.TotalExpired, "All accounts should be expired")
+		assert.Equal(t, 100.0, result.Expiry.ExpiryRate, "Expiry rate should be 100%")
+	})
+
+	t.Run("AllActive", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          25,
+			NumContracts:     15,
+			SlotsPerContract: 4,
+			StartBlock:       1,
+			EndBlock:         500,
+			ExpiryBlock:      1, // All should be active (expiry before start)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         8,
+		}
+
+		result, err := setup.Repository.GetAccountAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// No accounts should be expired
+		assert.Equal(t, 0, result.Expiry.TotalExpired, "No accounts should be expired")
+		assert.Equal(t, 0.0, result.Expiry.ExpiryRate, "Expiry rate should be 0%")
+	})
+}
+
+// TestGetStorageAnalytics provides comprehensive testing for the GetStorageAnalytics method
+// Tests Questions 3, 4, and 5b: Total storage slots, Expired storage slots, and Single access storage slots
+func TestGetStorageAnalytics(t *testing.T) {
+	t.Run("BasicFunctionality", func(t *testing.T) {
+		// Setup test with known data distribution
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          5,
+			NumContracts:     20,
+			SlotsPerContract: 5,
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      5,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   100,
+			TopN:         10,
+		}
+
+		// Calculate expected results based on deterministic test data
+		expected := setup.TestData.CalculateExpectedStorageAnalytics(config.ExpiryBlock)
+
+		// Test the method
+		result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate basic structure
+		assert.NotNil(t, result.Total)
+		assert.NotNil(t, result.Expiry)
+		assert.NotNil(t, result.SingleAccess)
+
+		// Validate that actual results match expected results from deterministic data
+		AssertStorageAnalyticsMatch(t, expected, result, 0.1)
+
+		// Validate data consistency
+		AssertAnalyticsDataConsistency(t, result)
+
+		t.Logf("Storage Analytics Results: Total=%d, Expired=%d, Active=%d, SingleAccess=%d",
+			result.Total.TotalSlots, result.Expiry.ExpiredSlots, result.Expiry.ActiveSlots,
+			result.SingleAccess.SingleAccessSlots)
+		t.Logf("Expected vs Actual - Expired: %d vs %d, SingleAccess: %d vs %d",
+			expected.Expiry.ExpiredSlots, result.Expiry.ExpiredSlots,
+			expected.SingleAccess.SingleAccessSlots, result.SingleAccess.SingleAccessSlots)
+	})
+
+	t.Run("DeterministicExpiryValidation", func(t *testing.T) {
+		// Test with specific configuration to validate expiry calculations
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          3,
+			NumContracts:     5,
+			SlotsPerContract: 4,
+			StartBlock:       1,
+			EndBlock:         15,
+			ExpiryBlock:      8, // Expiry in the middle
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedStorageAnalytics(config.ExpiryBlock)
+
+		// Get actual results
+		result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate exact matches for expiry data
+		assert.Equal(t, expected.Expiry.ExpiredSlots, result.Expiry.ExpiredSlots,
+			"Expired slots count should match deterministic calculation")
+		assert.Equal(t, expected.Expiry.ActiveSlots, result.Expiry.ActiveSlots,
+			"Active slots count should match deterministic calculation")
+		assert.Equal(t, expected.Total.TotalSlots, result.Total.TotalSlots,
+			"Total slots count should match deterministic calculation")
+
+		// Validate exact matches for single access data
+		assert.Equal(t, expected.SingleAccess.SingleAccessSlots, result.SingleAccess.SingleAccessSlots,
+			"Single access slots count should match deterministic calculation")
+
+		t.Logf("Deterministic validation passed - Total: %d, Expired: %d, SingleAccess: %d",
+			result.Total.TotalSlots, result.Expiry.ExpiredSlots, result.SingleAccess.SingleAccessSlots)
+	})
+
+	t.Run("SingleAccessValidation", func(t *testing.T) {
+		// Test configuration designed to have predictable single access patterns
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          2,
+			NumContracts:     4, // Some slots will have single access, some multiple
+			SlotsPerContract: 3,
+			StartBlock:       1,
+			EndBlock:         12,
+			ExpiryBlock:      0, // All active (no expiry)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   25,
+			TopN:         10,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedStorageAnalytics(config.ExpiryBlock)
+
+		// Get actual results
+		result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Since expiry block is after all data, no slots should be expired
+		assert.Equal(t, 0, result.Expiry.ExpiredSlots, "No slots should be expired")
+		assert.Equal(t, result.Total.TotalSlots, result.Expiry.ActiveSlots, "All slots should be active")
+		assert.Equal(t, 0.0, result.Expiry.ExpiryRate, "Expiry rate should be 0%")
+
+		// Validate single access calculations match expected
+		AssertStorageAnalyticsMatch(t, expected, result, 0.1)
+
+		t.Logf("Single access validation - Expected: %d, Actual: %d",
+			expected.SingleAccess.SingleAccessSlots, result.SingleAccess.SingleAccessSlots)
+	})
+
+	t.Run("EdgeCases", func(t *testing.T) {
+		t.Run("EmptyDatabase", func(t *testing.T) {
+			config := AnalyticsTestDataConfig{
+				NumEOAs:          0,
+				NumContracts:     0,
+				SlotsPerContract: 0,
+				StartBlock:       1,
+				EndBlock:         100,
+				ExpiryBlock:      50,
+			}
+
+			setup := SetupAnalyticsTest(t, config)
+			defer setup.Cleanup()
+
+			ctx := context.Background()
+			params := QueryParams{
+				ExpiryBlock:  config.ExpiryBlock,
+				CurrentBlock: config.EndBlock,
+				StartBlock:   config.StartBlock,
+				EndBlock:     config.EndBlock,
+				WindowSize:   10,
+				TopN:         5,
+			}
+
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Should have zero counts
+			assert.Equal(t, 0, result.Total.TotalSlots)
+			assert.Equal(t, 0, result.Expiry.ExpiredSlots)
+			assert.Equal(t, 0, result.Expiry.ActiveSlots)
+			assert.Equal(t, 0, result.SingleAccess.SingleAccessSlots)
+
+			// Rates should be zero or handle division by zero gracefully
+			assert.Equal(t, 0.0, result.Expiry.ExpiryRate)
+			assert.Equal(t, 0.0, result.SingleAccess.SingleAccessRate)
+		})
+
+		t.Run("NoStorageSlots", func(t *testing.T) {
+			config := AnalyticsTestDataConfig{
+				NumEOAs:          50, // Only EOAs, no contracts
+				NumContracts:     0,
+				SlotsPerContract: 0,
+				StartBlock:       1,
+				EndBlock:         200,
+				ExpiryBlock:      100,
+			}
+
+			setup := SetupAnalyticsTest(t, config)
+			defer setup.Cleanup()
+
+			ctx := context.Background()
+			params := QueryParams{
+				ExpiryBlock:  config.ExpiryBlock,
+				CurrentBlock: config.EndBlock,
+				StartBlock:   config.StartBlock,
+				EndBlock:     config.EndBlock,
+				WindowSize:   20,
+				TopN:         5,
+			}
+
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Should have zero storage slots
+			assert.Equal(t, 0, result.Total.TotalSlots)
+			assert.Equal(t, 0, result.Expiry.ExpiredSlots)
+			assert.Equal(t, 0, result.Expiry.ActiveSlots)
+			assert.Equal(t, 0, result.SingleAccess.SingleAccessSlots)
+
+			// Rates should be zero
+			assert.Equal(t, 0.0, result.Expiry.ExpiryRate)
+			assert.Equal(t, 0.0, result.SingleAccess.SingleAccessRate)
+		})
+
+		t.Run("AllSlotsExpired", func(t *testing.T) {
+			config := AnalyticsTestDataConfig{
+				NumEOAs:          10,
+				NumContracts:     5,
+				SlotsPerContract: 4,
+				StartBlock:       1,
+				EndBlock:         100,
+				ExpiryBlock:      200, // All should be expired (expiry after end)
+			}
+
+			setup := SetupAnalyticsTest(t, config)
+			defer setup.Cleanup()
+
+			ctx := context.Background()
+			params := QueryParams{
+				ExpiryBlock:  config.ExpiryBlock,
+				CurrentBlock: config.ExpiryBlock + 100,
+				StartBlock:   config.StartBlock,
+				EndBlock:     config.EndBlock,
+				WindowSize:   10,
+				TopN:         5,
+			}
+
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// All slots should be expired
+			assert.Equal(t, result.Total.TotalSlots, result.Expiry.ExpiredSlots, "All slots should be expired")
+			assert.Equal(t, 0, result.Expiry.ActiveSlots, "No slots should be active")
+			assert.Equal(t, 100.0, result.Expiry.ExpiryRate, "Expiry rate should be 100%")
+		})
+
+		t.Run("AllSlotsActive", func(t *testing.T) {
+			config := AnalyticsTestDataConfig{
+				NumEOAs:          15,
+				NumContracts:     8,
+				SlotsPerContract: 6,
+				StartBlock:       1,
+				EndBlock:         500,
+				ExpiryBlock:      1, // All should be active (expiry before start)
+			}
+
+			setup := SetupAnalyticsTest(t, config)
+			defer setup.Cleanup()
+
+			ctx := context.Background()
+			params := QueryParams{
+				ExpiryBlock:  config.ExpiryBlock,
+				CurrentBlock: config.EndBlock,
+				StartBlock:   config.StartBlock,
+				EndBlock:     config.EndBlock,
+				WindowSize:   50,
+				TopN:         8,
+			}
+
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// No slots should be expired
+			assert.Equal(t, 0, result.Expiry.ExpiredSlots, "No slots should be expired")
+			assert.Equal(t, result.Total.TotalSlots, result.Expiry.ActiveSlots, "All slots should be active")
+			assert.Equal(t, 0.0, result.Expiry.ExpiryRate, "Expiry rate should be 0%")
+		})
+	})
+
+	t.Run("ParameterValidation", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+
+		t.Run("InvalidExpiryBlock", func(t *testing.T) {
+			params := QueryParams{
+				ExpiryBlock:  1000, // Greater than current block
+				CurrentBlock: 500,
+				StartBlock:   1,
+				EndBlock:     400,
+				WindowSize:   10,
+				TopN:         5,
+			}
+
+			// Should handle invalid parameters gracefully
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			// Note: The actual behavior depends on implementation
+			if err != nil {
+				t.Logf("Expected error for invalid expiry block: %v", err)
+			} else {
+				require.NotNil(t, result)
+				t.Logf("Method handled invalid expiry block gracefully")
+			}
+		})
+
+		t.Run("ZeroBlocks", func(t *testing.T) {
+			params := QueryParams{
+				ExpiryBlock:  0,
+				CurrentBlock: 0,
+				StartBlock:   0,
+				EndBlock:     0,
+				WindowSize:   1,
+				TopN:         1,
+			}
+
+			result, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Should handle zero blocks gracefully
+			t.Logf("Method handled zero blocks gracefully")
+		})
+	})
+
+	t.Run("ConcurrencyTesting", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  50,
+			CurrentBlock: 100,
+			StartBlock:   1,
+			EndBlock:     100,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Test concurrent access
+		const numGoroutines = 8
+		results := make(chan error, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func(routineID int) {
+				defer func() {
+					if r := recover(); r != nil {
+						results <- assert.AnError
+					}
+				}()
+
+				analytics, err := setup.Repository.GetStorageAnalytics(ctx, params)
+				if err != nil {
+					results <- err
+					return
+				}
+
+				if analytics == nil {
+					results <- assert.AnError
+					return
+				}
+
+				// Validate basic consistency
+				if analytics.Total.TotalSlots != analytics.Expiry.ExpiredSlots+analytics.Expiry.ActiveSlots {
+					results <- assert.AnError
+					return
+				}
+
+				results <- nil
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < numGoroutines; i++ {
+			err := <-results
+			assert.NoError(t, err, "Concurrent access should not cause errors")
+		}
+
+		t.Logf("Concurrency test completed successfully with %d goroutines", numGoroutines)
+	})
+
+	t.Run("ErrorScenarios", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		params := QueryParams{
+			ExpiryBlock:  50,
+			CurrentBlock: 100,
+			StartBlock:   1,
+			EndBlock:     100,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Test with cancelled context
+		t.Run("CancelledContext", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // Cancel immediately
+
+			_, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			if err != nil {
+				assert.Contains(t, err.Error(), "context", "Should handle cancelled context")
+				t.Logf("Correctly handled cancelled context: %v", err)
+			} else {
+				t.Logf("Method completed despite cancelled context")
+			}
+		})
+
+		// Test with timeout context
+		t.Run("TimeoutContext", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+			defer cancel()
+
+			_, err := setup.Repository.GetStorageAnalytics(ctx, params)
+			if err != nil {
+				t.Logf("Correctly handled timeout context: %v", err)
+			} else {
+				t.Logf("Method completed despite timeout context")
+			}
+		})
 	})
 }

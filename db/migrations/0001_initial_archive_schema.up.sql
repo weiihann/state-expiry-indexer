@@ -97,14 +97,17 @@ ALTER TABLE storage_state
 
 CREATE TABLE account_access_count_agg (
     address       FixedString(20),
+    is_contract_state   AggregateFunction(argMax, UInt8, UInt64),
     access_count  AggregateFunction(count, UInt64)
-) ENGINE = AggregatingMergeTree()
+) 
+ENGINE = AggregatingMergeTree()
 ORDER BY (address);
 
 CREATE MATERIALIZED VIEW mv_account_access_count
 TO account_access_count_agg AS
 SELECT
     address,
+    argMaxState(is_contract, block_number) AS is_contract_state,
     countState() AS access_count
 FROM accounts_archive
 GROUP BY address;

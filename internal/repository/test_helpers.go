@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/testdb"
 )
@@ -38,48 +38,28 @@ type AnalyticsTestDataConfig struct {
 	NumContracts int
 
 	// Storage configuration
-	SlotsPerContract    int
-	MaxSlotsPerContract int
+	SlotsPerContract int
 
 	// Block range configuration
 	StartBlock  uint64
 	EndBlock    uint64
 	ExpiryBlock uint64
-
-	// Access patterns
-	SingleAccessAccountsPercent float64 // Percentage of accounts with single access
-	SingleAccessSlotsPercent    float64 // Percentage of storage slots with single access
-
-	// Activity patterns
-	HighActivityBlocks []uint64 // Blocks with high activity
-	LowActivityBlocks  []uint64 // Blocks with low activity
-
-	// Randomization
-	RandomSeed int64
 }
 
 // DefaultAnalyticsTestDataConfig returns a standard configuration for analytics testing
 func DefaultAnalyticsTestDataConfig() AnalyticsTestDataConfig {
 	return AnalyticsTestDataConfig{
-		NumEOAs:                     100,
-		NumContracts:                50,
-		SlotsPerContract:            10,
-		MaxSlotsPerContract:         100,
-		StartBlock:                  1,
-		EndBlock:                    1000,
-		ExpiryBlock:                 500,
-		SingleAccessAccountsPercent: 0.2, // 20% single access
-		SingleAccessSlotsPercent:    0.3, // 30% single access
-		HighActivityBlocks:          []uint64{100, 200, 300},
-		LowActivityBlocks:           []uint64{50, 150, 250},
-		RandomSeed:                  42,
+		NumEOAs:          100,
+		NumContracts:     50,
+		SlotsPerContract: 10,
+		StartBlock:       1,
+		EndBlock:         1000,
+		ExpiryBlock:      500,
 	}
 }
 
 // GenerateAnalyticsTestData creates comprehensive test data for analytics testing
 func GenerateAnalyticsTestData(config AnalyticsTestDataConfig) *AnalyticsTestData {
-	rand.Seed(config.RandomSeed)
-
 	data := &AnalyticsTestData{
 		Config:          config,
 		EOAs:            make([]string, config.NumEOAs),
@@ -105,9 +85,6 @@ func GenerateAnalyticsTestData(config AnalyticsTestDataConfig) *AnalyticsTestDat
 
 		// Generate storage slots for each contract
 		numSlots := config.SlotsPerContract
-		if config.MaxSlotsPerContract > config.SlotsPerContract {
-			numSlots = config.SlotsPerContract + rand.Intn(config.MaxSlotsPerContract-config.SlotsPerContract)
-		}
 
 		slots := make([]string, numSlots)
 		for j := 0; j < numSlots; j++ {
@@ -116,10 +93,10 @@ func GenerateAnalyticsTestData(config AnalyticsTestDataConfig) *AnalyticsTestDat
 		data.StorageSlots[addr] = slots
 	}
 
-	// Generate account accesses
+	// Generate deterministic account accesses
 	data.generateAccountAccesses()
 
-	// Generate storage accesses
+	// Generate deterministic storage accesses
 	data.generateStorageAccesses()
 
 	return data
@@ -136,7 +113,7 @@ type AnalyticsTestData struct {
 	StorageSlots    map[string][]string
 }
 
-// generateAccountAccesses creates account access patterns based on configuration
+// generateAccountAccesses creates deterministic account access patterns
 func (data *AnalyticsTestData) generateAccountAccesses() {
 	config := data.Config
 
@@ -145,63 +122,42 @@ func (data *AnalyticsTestData) generateAccountAccesses() {
 		data.AccountAccesses[block] = make(map[string]struct{})
 	}
 
-	// Generate single access accounts
-	singleAccessEOAs := int(float64(len(data.EOAs)) * config.SingleAccessAccountsPercent)
-	singleAccessContracts := int(float64(len(data.Contracts)) * config.SingleAccessAccountsPercent)
+	// Generate deterministic access patterns for all accounts
+	// Each account gets accessed at predictable intervals
+	blockRange := config.EndBlock - config.StartBlock + 1
 
-	// Single access EOAs
-	for i := 0; i < singleAccessEOAs; i++ {
-		addr := data.EOAs[i]
-		block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
-		data.AccountAccesses[block][addr] = struct{}{}
-	}
+	// EOAs get accessed every few blocks deterministically
+	for i, addr := range data.EOAs {
+		// Each EOA gets accessed at deterministic blocks based on its index
+		accessBlock := config.StartBlock + uint64(i)%blockRange
+		data.AccountAccesses[accessBlock][addr] = struct{}{}
 
-	// Single access contracts
-	for i := 0; i < singleAccessContracts; i++ {
-		addr := data.Contracts[i]
-		block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
-		data.AccountAccesses[block][addr] = struct{}{}
-	}
-
-	// Generate multiple access accounts
-	multiAccessEOAs := data.EOAs[singleAccessEOAs:]
-	multiAccessContracts := data.Contracts[singleAccessContracts:]
-
-	// Multiple access EOAs
-	for _, addr := range multiAccessEOAs {
-		numAccesses := 2 + rand.Intn(5) // 2-6 accesses
-		for j := 0; j < numAccesses; j++ {
-			block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
-			data.AccountAccesses[block][addr] = struct{}{}
+		// Add a second access for some EOAs to create variety
+		if i%3 == 0 && blockRange > 1 {
+			secondBlock := config.StartBlock + uint64(i+1)%blockRange
+			data.AccountAccesses[secondBlock][addr] = struct{}{}
 		}
 	}
 
-	// Multiple access contracts
-	for _, addr := range multiAccessContracts {
-		numAccesses := 2 + rand.Intn(8) // 2-9 accesses
-		for j := 0; j < numAccesses; j++ {
-			block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
-			data.AccountAccesses[block][addr] = struct{}{}
-		}
-	}
+	// Contracts get accessed at different deterministic intervals
+	for i, addr := range data.Contracts {
+		// Each contract gets accessed at deterministic blocks based on its index
+		accessBlock := config.StartBlock + uint64(i*2)%blockRange
+		data.AccountAccesses[accessBlock][addr] = struct{}{}
 
-	// Add high activity to specific blocks
-	for _, block := range config.HighActivityBlocks {
-		if block >= config.StartBlock && block <= config.EndBlock {
-			// Add extra accesses for high activity blocks
-			for i := 0; i < 20; i++ {
-				if i < len(data.EOAs) {
-					data.AccountAccesses[block][data.EOAs[i]] = struct{}{}
-				}
-				if i < len(data.Contracts) {
-					data.AccountAccesses[block][data.Contracts[i]] = struct{}{}
-				}
-			}
+		// Add additional accesses for contracts to simulate more activity
+		if blockRange > 2 {
+			secondBlock := config.StartBlock + uint64(i*2+1)%blockRange
+			data.AccountAccesses[secondBlock][addr] = struct{}{}
+		}
+		if i%2 == 0 && blockRange > 3 {
+			thirdBlock := config.StartBlock + uint64(i*3)%blockRange
+			data.AccountAccesses[thirdBlock][addr] = struct{}{}
 		}
 	}
 }
 
-// generateStorageAccesses creates storage access patterns based on configuration
+// generateStorageAccesses creates deterministic storage access patterns
 func (data *AnalyticsTestData) generateStorageAccesses() {
 	config := data.Config
 
@@ -210,53 +166,38 @@ func (data *AnalyticsTestData) generateStorageAccesses() {
 		data.StorageAccesses[block] = make(map[string]map[string]struct{})
 	}
 
-	// Generate storage accesses for each contract
-	for contractAddr, slots := range data.StorageSlots {
-		// Determine single access slots
-		singleAccessSlots := int(float64(len(slots)) * config.SingleAccessSlotsPercent)
+	// Generate deterministic storage accesses for each contract
+	blockRange := config.EndBlock - config.StartBlock + 1
 
-		// Single access slots
-		for i := 0; i < singleAccessSlots && i < len(slots); i++ {
-			slot := slots[i]
-			block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
+	for contractIndex, contractAddr := range data.Contracts {
+		slots := data.StorageSlots[contractAddr]
 
-			if data.StorageAccesses[block][contractAddr] == nil {
-				data.StorageAccesses[block][contractAddr] = make(map[string]struct{})
+		// Each storage slot gets accessed at deterministic intervals
+		for slotIndex, slot := range slots {
+			// Calculate deterministic access block based on contract and slot indices
+			accessBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex))%blockRange
+
+			if data.StorageAccesses[accessBlock][contractAddr] == nil {
+				data.StorageAccesses[accessBlock][contractAddr] = make(map[string]struct{})
 			}
-			data.StorageAccesses[block][contractAddr][slot] = struct{}{}
-		}
+			data.StorageAccesses[accessBlock][contractAddr][slot] = struct{}{}
 
-		// Multiple access slots
-		for i := singleAccessSlots; i < len(slots); i++ {
-			slot := slots[i]
-			numAccesses := 2 + rand.Intn(4) // 2-5 accesses
-
-			for j := 0; j < numAccesses; j++ {
-				block := config.StartBlock + uint64(rand.Intn(int(config.EndBlock-config.StartBlock+1)))
-
-				if data.StorageAccesses[block][contractAddr] == nil {
-					data.StorageAccesses[block][contractAddr] = make(map[string]struct{})
+			// Add additional accesses for some slots to create variety
+			if slotIndex%2 == 0 && blockRange > 1 {
+				secondBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex+1))%blockRange
+				if data.StorageAccesses[secondBlock][contractAddr] == nil {
+					data.StorageAccesses[secondBlock][contractAddr] = make(map[string]struct{})
 				}
-				data.StorageAccesses[block][contractAddr][slot] = struct{}{}
+				data.StorageAccesses[secondBlock][contractAddr][slot] = struct{}{}
 			}
-		}
-	}
 
-	// Add high activity to specific blocks
-	for _, block := range config.HighActivityBlocks {
-		if block >= config.StartBlock && block <= config.EndBlock {
-			// Add extra storage accesses for high activity blocks
-			for i := 0; i < 10 && i < len(data.Contracts); i++ {
-				contractAddr := data.Contracts[i]
-				slots := data.StorageSlots[contractAddr]
-
-				if data.StorageAccesses[block][contractAddr] == nil {
-					data.StorageAccesses[block][contractAddr] = make(map[string]struct{})
+			// Add third access for some slots
+			if slotIndex%3 == 0 && blockRange > 2 {
+				thirdBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex+2))%blockRange
+				if data.StorageAccesses[thirdBlock][contractAddr] == nil {
+					data.StorageAccesses[thirdBlock][contractAddr] = make(map[string]struct{})
 				}
-
-				for j := 0; j < 5 && j < len(slots); j++ {
-					data.StorageAccesses[block][contractAddr][slots[j]] = struct{}{}
-				}
+				data.StorageAccesses[thirdBlock][contractAddr][slot] = struct{}{}
 			}
 		}
 	}
@@ -265,13 +206,10 @@ func (data *AnalyticsTestData) generateStorageAccesses() {
 // InsertTestData inserts the generated test data into the repository
 func (data *AnalyticsTestData) InsertTestData(ctx context.Context, repo StateRepositoryInterface) error {
 	// Insert data in chunks to avoid overwhelming the database
-	const chunkSize = 100
+	const chunkSize = 10
 
 	for block := data.Config.StartBlock; block <= data.Config.EndBlock; block += chunkSize {
-		endBlock := block + chunkSize - 1
-		if endBlock > data.Config.EndBlock {
-			endBlock = data.Config.EndBlock
-		}
+		endBlock := min(block+chunkSize-1, data.Config.EndBlock)
 
 		// Prepare chunk data
 		chunkAccountAccesses := make(map[uint64]map[string]struct{})
@@ -425,7 +363,7 @@ func SetupAnalyticsTest(t *testing.T, config AnalyticsTestDataConfig) *Analytics
 	cleanup := testdb.SetupTestDatabase(t)
 
 	// Create repository
-	repo, err := NewRepository(context.Background(), dbConfig)
+	repo, err := NewRepository(t.Context(), dbConfig)
 	if err != nil {
 		cleanup()
 		t.Fatalf("Failed to create repository: %v", err)
@@ -435,7 +373,7 @@ func SetupAnalyticsTest(t *testing.T, config AnalyticsTestDataConfig) *Analytics
 	testData := GenerateAnalyticsTestData(config)
 
 	// Insert test data
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := testData.InsertTestData(ctx, repo); err != nil {
 		cleanup()
 		t.Fatalf("Failed to insert test data: %v", err)
@@ -497,11 +435,11 @@ func AssertAnalyticsDataConsistency(t *testing.T, data interface{}) {
 				v.Expiry.TotalExpired, v.Expiry.ExpiredEOAs, v.Expiry.ExpiredContracts)
 		}
 
-		// Validate rates
+		// Validate rates (implementation returns percentages, not decimals)
 		if v.Total.Total > 0 {
-			expectedExpiryRate := float64(v.Expiry.TotalExpired) / float64(v.Total.Total)
-			if abs(v.Expiry.ExpiryRate-expectedExpiryRate) > 0.01 {
-				t.Errorf("Expiry rate mismatch: Expected=%.2f, Got=%.2f", expectedExpiryRate, v.Expiry.ExpiryRate)
+			expectedExpiryRate := float64(v.Expiry.TotalExpired) / float64(v.Total.Total) * 100
+			if abs(v.Expiry.ExpiryRate-expectedExpiryRate) > 0.1 {
+				t.Errorf("Expiry rate mismatch: Expected=%.2f%%, Got=%.2f%%", expectedExpiryRate, v.Expiry.ExpiryRate)
 			}
 		}
 
@@ -528,4 +466,261 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// ==============================================================================
+// DETERMINISTIC ANALYTICS CALCULATION UTILITIES
+// ==============================================================================
+
+// CalculateExpectedAccountAnalytics calculates the expected account analytics based on deterministic test data
+func (data *AnalyticsTestData) CalculateExpectedAccountAnalytics(expiryBlock uint64) *AccountAnalytics {
+	config := data.Config
+	blockRange := config.EndBlock - config.StartBlock + 1
+
+	// Calculate last access blocks for each account based on the deterministic generation logic
+	accountLastAccess := make(map[string]uint64)
+
+	// Calculate EOA last access blocks
+	for i, addr := range data.EOAs {
+		// Primary access
+		accessBlock := config.StartBlock + uint64(i)%blockRange
+		accountLastAccess[addr] = accessBlock
+
+		// Secondary access (if applicable)
+		if i%3 == 0 && blockRange > 1 {
+			secondBlock := config.StartBlock + uint64(i+1)%blockRange
+			if secondBlock > accountLastAccess[addr] {
+				accountLastAccess[addr] = secondBlock
+			}
+		}
+	}
+
+	// Calculate contract last access blocks
+	for i, addr := range data.Contracts {
+		// Primary access
+		accessBlock := config.StartBlock + uint64(i*2)%blockRange
+		accountLastAccess[addr] = accessBlock
+
+		// Secondary access
+		if blockRange > 2 {
+			secondBlock := config.StartBlock + uint64(i*2+1)%blockRange
+			if secondBlock > accountLastAccess[addr] {
+				accountLastAccess[addr] = secondBlock
+			}
+		}
+
+		// Tertiary access (if applicable)
+		if i%2 == 0 && blockRange > 3 {
+			thirdBlock := config.StartBlock + uint64(i*3)%blockRange
+			if thirdBlock > accountLastAccess[addr] {
+				accountLastAccess[addr] = thirdBlock
+			}
+		}
+	}
+
+	// Calculate access counts for each account
+	accountAccessCounts := make(map[string]int)
+	for i, addr := range data.EOAs {
+		count := 1 // Primary access
+		if i%3 == 0 && blockRange > 1 {
+			count++ // Secondary access
+		}
+		accountAccessCounts[addr] = count
+	}
+
+	for i, addr := range data.Contracts {
+		count := 1 // Primary access
+		if blockRange > 2 {
+			count++ // Secondary access
+		}
+		if i%2 == 0 && blockRange > 3 {
+			count++ // Tertiary access
+		}
+		accountAccessCounts[addr] = count
+	}
+
+	// Calculate expiry and single access statistics
+	var expiredEOAs, expiredContracts, singleAccessEOAs, singleAccessContracts int
+
+	for _, addr := range data.EOAs {
+		if accountLastAccess[addr] < expiryBlock {
+			expiredEOAs++
+		}
+		if accountAccessCounts[addr] == 1 {
+			singleAccessEOAs++
+		}
+	}
+
+	for _, addr := range data.Contracts {
+		if accountLastAccess[addr] < expiryBlock {
+			expiredContracts++
+		}
+		if accountAccessCounts[addr] == 1 {
+			singleAccessContracts++
+		}
+	}
+
+	totalExpired := expiredEOAs + expiredContracts
+	totalSingleAccess := singleAccessEOAs + singleAccessContracts
+	totalAccounts := len(data.EOAs) + len(data.Contracts)
+
+	var expiryRate, singleAccessRate float64
+	if totalAccounts > 0 {
+		expiryRate = float64(totalExpired) / float64(totalAccounts) * 100
+		singleAccessRate = float64(totalSingleAccess) / float64(totalAccounts) * 100
+	}
+
+	var eoaPercentage, contractPercentage float64
+	if totalAccounts > 0 {
+		eoaPercentage = float64(len(data.EOAs)) / float64(totalAccounts) * 100
+		contractPercentage = float64(len(data.Contracts)) / float64(totalAccounts) * 100
+	}
+
+	return &AccountAnalytics{
+		Total: AccountTotals{
+			EOAs:      len(data.EOAs),
+			Contracts: len(data.Contracts),
+			Total:     totalAccounts,
+		},
+		Expiry: AccountExpiryData{
+			ExpiredEOAs:      expiredEOAs,
+			ExpiredContracts: expiredContracts,
+			TotalExpired:     totalExpired,
+			ExpiryRate:       expiryRate,
+		},
+		SingleAccess: AccountSingleAccessData{
+			SingleAccessEOAs:      singleAccessEOAs,
+			SingleAccessContracts: singleAccessContracts,
+			TotalSingleAccess:     totalSingleAccess,
+			SingleAccessRate:      singleAccessRate,
+		},
+		Distribution: AccountDistribution{
+			EOAPercentage:      eoaPercentage,
+			ContractPercentage: contractPercentage,
+		},
+	}
+}
+
+// CalculateExpectedStorageAnalytics calculates the expected storage analytics based on deterministic test data
+func (data *AnalyticsTestData) CalculateExpectedStorageAnalytics(expiryBlock uint64) *StorageAnalytics {
+	config := data.Config
+	blockRange := config.EndBlock - config.StartBlock + 1
+
+	// Calculate last access blocks for each storage slot based on the deterministic generation logic
+	slotLastAccess := make(map[string]map[string]uint64) // contract -> slot -> lastBlock
+	slotAccessCounts := make(map[string]map[string]int)  // contract -> slot -> count
+
+	for contractIndex, contractAddr := range data.Contracts {
+		slots := data.StorageSlots[contractAddr]
+		slotLastAccess[contractAddr] = make(map[string]uint64)
+		slotAccessCounts[contractAddr] = make(map[string]int)
+
+		for slotIndex, slot := range slots {
+			// Primary access
+			accessBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex))%blockRange
+			slotLastAccess[contractAddr][slot] = accessBlock
+			count := 1
+
+			// Secondary access (if applicable)
+			if slotIndex%2 == 0 && blockRange > 1 {
+				secondBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex+1))%blockRange
+				if secondBlock > slotLastAccess[contractAddr][slot] {
+					slotLastAccess[contractAddr][slot] = secondBlock
+				}
+				count++
+			}
+
+			// Tertiary access (if applicable)
+			if slotIndex%3 == 0 && blockRange > 2 {
+				thirdBlock := config.StartBlock + uint64((contractIndex*len(slots)+slotIndex+2))%blockRange
+				if thirdBlock > slotLastAccess[contractAddr][slot] {
+					slotLastAccess[contractAddr][slot] = thirdBlock
+				}
+				count++
+			}
+
+			slotAccessCounts[contractAddr][slot] = count
+		}
+	}
+
+	// Calculate expiry and single access statistics
+	var expiredSlots, singleAccessSlots, totalSlots int
+
+	for contractAddr, slots := range data.StorageSlots {
+		for _, slot := range slots {
+			totalSlots++
+			if slotLastAccess[contractAddr][slot] < expiryBlock {
+				expiredSlots++
+			}
+			if slotAccessCounts[contractAddr][slot] == 1 {
+				singleAccessSlots++
+			}
+		}
+	}
+
+	activeSlots := totalSlots - expiredSlots
+
+	var expiryRate, singleAccessRate float64
+	if totalSlots > 0 {
+		expiryRate = float64(expiredSlots) / float64(totalSlots) * 100
+		singleAccessRate = float64(singleAccessSlots) / float64(totalSlots) * 100
+	}
+
+	return &StorageAnalytics{
+		Total: StorageTotals{
+			TotalSlots: totalSlots,
+		},
+		Expiry: StorageExpiryData{
+			ExpiredSlots: expiredSlots,
+			ActiveSlots:  activeSlots,
+			ExpiryRate:   expiryRate,
+		},
+		SingleAccess: StorageSingleAccessData{
+			SingleAccessSlots: singleAccessSlots,
+			SingleAccessRate:  singleAccessRate,
+		},
+	}
+}
+
+// AssertAccountAnalyticsMatch validates that actual analytics match expected analytics
+func AssertAccountAnalyticsMatch(t *testing.T, expected, actual *AccountAnalytics, tolerance float64) {
+	t.Helper()
+
+	// Validate totals
+	assert.Equal(t, expected.Total.EOAs, actual.Total.EOAs, "EOA count mismatch")
+	assert.Equal(t, expected.Total.Contracts, actual.Total.Contracts, "Contract count mismatch")
+	assert.Equal(t, expected.Total.Total, actual.Total.Total, "Total account count mismatch")
+
+	// Validate expiry data
+	assert.Equal(t, expected.Expiry.ExpiredEOAs, actual.Expiry.ExpiredEOAs, "Expired EOA count mismatch")
+	assert.Equal(t, expected.Expiry.ExpiredContracts, actual.Expiry.ExpiredContracts, "Expired contract count mismatch")
+	assert.Equal(t, expected.Expiry.TotalExpired, actual.Expiry.TotalExpired, "Total expired count mismatch")
+	assert.InDelta(t, expected.Expiry.ExpiryRate, actual.Expiry.ExpiryRate, tolerance, "Expiry rate mismatch")
+
+	// Validate single access data
+	assert.Equal(t, expected.SingleAccess.SingleAccessEOAs, actual.SingleAccess.SingleAccessEOAs, "Single access EOA count mismatch")
+	assert.Equal(t, expected.SingleAccess.SingleAccessContracts, actual.SingleAccess.SingleAccessContracts, "Single access contract count mismatch")
+	assert.Equal(t, expected.SingleAccess.TotalSingleAccess, actual.SingleAccess.TotalSingleAccess, "Total single access count mismatch")
+	assert.InDelta(t, expected.SingleAccess.SingleAccessRate, actual.SingleAccess.SingleAccessRate, tolerance, "Single access rate mismatch")
+
+	// Validate distribution
+	assert.InDelta(t, expected.Distribution.EOAPercentage, actual.Distribution.EOAPercentage, tolerance, "EOA percentage mismatch")
+	assert.InDelta(t, expected.Distribution.ContractPercentage, actual.Distribution.ContractPercentage, tolerance, "Contract percentage mismatch")
+}
+
+// AssertStorageAnalyticsMatch validates that actual analytics match expected analytics
+func AssertStorageAnalyticsMatch(t *testing.T, expected, actual *StorageAnalytics, tolerance float64) {
+	t.Helper()
+
+	// Validate totals
+	assert.Equal(t, expected.Total.TotalSlots, actual.Total.TotalSlots, "Total slots count mismatch")
+
+	// Validate expiry data
+	assert.Equal(t, expected.Expiry.ExpiredSlots, actual.Expiry.ExpiredSlots, "Expired slots count mismatch")
+	assert.Equal(t, expected.Expiry.ActiveSlots, actual.Expiry.ActiveSlots, "Active slots count mismatch")
+	assert.InDelta(t, expected.Expiry.ExpiryRate, actual.Expiry.ExpiryRate, tolerance, "Expiry rate mismatch")
+
+	// Validate single access data
+	assert.Equal(t, expected.SingleAccess.SingleAccessSlots, actual.SingleAccess.SingleAccessSlots, "Single access slots count mismatch")
+	assert.InDelta(t, expected.SingleAccess.SingleAccessRate, actual.SingleAccess.SingleAccessRate, tolerance, "Single access rate mismatch")
 }

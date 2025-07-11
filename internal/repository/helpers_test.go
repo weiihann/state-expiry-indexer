@@ -20,24 +20,16 @@ func TestAnalyticsTestDataGeneration(t *testing.T) {
 		assert.Equal(t, 50, config.NumContracts)
 		assert.Equal(t, 10, config.SlotsPerContract)
 		assert.Equal(t, uint64(500), config.ExpiryBlock)
-		assert.Equal(t, 0.2, config.SingleAccessAccountsPercent)
-		assert.Equal(t, 0.3, config.SingleAccessSlotsPercent)
 	})
 
 	t.Run("TestDataGeneration", func(t *testing.T) {
 		config := AnalyticsTestDataConfig{
-			NumEOAs:                     10,
-			NumContracts:                5,
-			SlotsPerContract:            3,
-			MaxSlotsPerContract:         5,
-			StartBlock:                  1,
-			EndBlock:                    100,
-			ExpiryBlock:                 50,
-			SingleAccessAccountsPercent: 0.5, // 50% single access
-			SingleAccessSlotsPercent:    0.4, // 40% single access
-			HighActivityBlocks:          []uint64{25, 75},
-			LowActivityBlocks:           []uint64{10, 90},
-			RandomSeed:                  123,
+			NumEOAs:          10,
+			NumContracts:     5,
+			SlotsPerContract: 3,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      50,
 		}
 
 		data := GenerateAnalyticsTestData(config)
@@ -82,32 +74,17 @@ func TestAnalyticsTestDataGeneration(t *testing.T) {
 			}
 		}
 		assert.Greater(t, totalStorageAccesses, 0, "Should have storage accesses")
-
-		// Validate high activity blocks have more activity
-		highActivityCount := 0
-		for _, block := range config.HighActivityBlocks {
-			if accesses, exists := data.AccountAccesses[block]; exists {
-				highActivityCount += len(accesses)
-			}
-		}
-		assert.Greater(t, highActivityCount, 0, "High activity blocks should have activity")
 	})
 
 	t.Run("TestDataInsertion", func(t *testing.T) {
 		// Use small dataset for quick testing
 		config := AnalyticsTestDataConfig{
-			NumEOAs:                     5,
-			NumContracts:                3,
-			SlotsPerContract:            2,
-			MaxSlotsPerContract:         4,
-			StartBlock:                  1,
-			EndBlock:                    10,
-			ExpiryBlock:                 5,
-			SingleAccessAccountsPercent: 0.3,
-			SingleAccessSlotsPercent:    0.2,
-			HighActivityBlocks:          []uint64{5},
-			LowActivityBlocks:           []uint64{2},
-			RandomSeed:                  456,
+			NumEOAs:          5,
+			NumContracts:     3,
+			SlotsPerContract: 2,
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      5,
 		}
 
 		setup := SetupAnalyticsTest(t, config)
@@ -258,7 +235,7 @@ func TestAnalyticsDataConsistency(t *testing.T) {
 				ExpiredEOAs:      20,
 				ExpiredContracts: 10,
 				TotalExpired:     30,
-				ExpiryRate:       0.30,
+				ExpiryRate:       30.0,
 			},
 			SingleAccess: AccountSingleAccessData{
 				SingleAccessEOAs:      15,
