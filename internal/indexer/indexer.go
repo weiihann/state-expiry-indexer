@@ -249,8 +249,13 @@ func (s *Service) RunProcessor(ctx context.Context) error {
 			continue
 		}
 
-		// Wait before next processing cycle
-		time.Sleep(pollInterval)
+		select {
+		case <-ctx.Done():
+			s.log.Info("Indexer processor workflow stopped")
+			return nil
+		case <-time.After(pollInterval):
+			// Wait before next processing cycle
+		}
 	}
 }
 
@@ -300,6 +305,13 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 		default:
 		}
 
+		// If we caught up to the latest range and the number of blocks have not reached the range size,
+		// we can stop processing and just wait.
+		_, end := s.indexer.rangeProcessor.GetRangeBlockNumbers(currentRange)
+		if end > latestBlock.Uint64()-uint64(s.config.RangeSize) {
+			break
+		}
+
 		// Process the range
 		if err := s.indexer.ProcessRange(ctx, currentRange, sa, false); err != nil {
 			return fmt.Errorf("could not process range %d: %w", currentRange, err)
@@ -340,13 +352,22 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 	// This will require careful state management and new logic to fetch and process
 	// single blocks.
 
+	// Force commit any remaining data
+	if sa.Count() > 0 {
+		if err := sa.Commit(ctx, s.repo, currentRange); err != nil {
+			return fmt.Errorf("could not commit range %d: %w", currentRange, err)
+		}
+		sa.Reset()
+	}
+
 	if processedCount > 0 {
 		s.log.Info("Completed range processing cycle",
 			"processed_ranges", processedCount,
 			"last_indexed_range", currentRange-1)
 	} else {
-		s.log.Debug("No new ranges available for processing",
-			"last_indexed_range", lastIndexedRange)
+		s.log.Info("Caught up to the latest head",
+			"last_indexed_range", lastIndexedRange,
+			"latest_range", latestRange)
 	}
 
 	return nil

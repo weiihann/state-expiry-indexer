@@ -144,7 +144,7 @@ func setDefaults() {
 
 	// Indexer defaults
 	viper.SetDefault("BLOCK_BATCH_SIZE", 100)
-	viper.SetDefault("POLL_INTERVAL_SECONDS", 10)
+	viper.SetDefault("POLL_INTERVAL_SECONDS", 60)
 	viper.SetDefault("RANGE_SIZE", 1000)
 
 	// Logging defaults
