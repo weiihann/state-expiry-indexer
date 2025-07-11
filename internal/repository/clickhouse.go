@@ -113,10 +113,7 @@ func (r *ClickHouseRepository) InsertRange(
 ) error {
 	log := logger.GetLogger("clickhouse-repo")
 
-	log.Info("Starting ClickHouse archive mode update with all events",
-		"range_number", rangeNumber,
-		"account_events", len(accountAccesses),
-		"storage_events", len(storageAccesses))
+	log.Info("Inserting range", "range_number", rangeNumber)
 
 	// Start transaction
 	tx, err := r.db.BeginTx(ctx, nil)

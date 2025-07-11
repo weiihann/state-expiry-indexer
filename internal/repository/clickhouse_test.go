@@ -145,7 +145,7 @@ func TestClickHouseInsertRange(t *testing.T) {
 		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
 		analytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry after our test data
 		require.NoError(t, err)
-		assert.Greater(t, analytics.Total.Total, 0, "Should have accounts in ClickHouse")
+		assert.Equal(t, 2, analytics.Total.Total, "Should have accounts in ClickHouse")
 	})
 
 	t.Run("StorageOnly", func(t *testing.T) {
@@ -173,7 +173,7 @@ func TestClickHouseInsertRange(t *testing.T) {
 		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
 		analytics, err := repo.GetStorageAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, analytics.Total.TotalSlots, 0, "Should have storage slots in ClickHouse")
+		assert.Equal(t, 2, analytics.Total.TotalSlots, "Should have storage slots in ClickHouse")
 	})
 
 	t.Run("AccountsAndStorage", func(t *testing.T) {
@@ -210,11 +210,11 @@ func TestClickHouseInsertRange(t *testing.T) {
 		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
 		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, accountAnalytics.Total.Total, 0, "Should have accounts")
+		assert.Equal(t, 2, accountAnalytics.Total.Total, "Should have accounts")
 
 		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, storageAnalytics.Total.TotalSlots, 0, "Should have storage slots")
+		assert.Equal(t, 3, storageAnalytics.Total.TotalSlots, "Should have storage slots")
 
 		// Verify metadata was updated
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -232,6 +232,7 @@ func TestClickHouseInsertRange(t *testing.T) {
 		accounts := make(map[uint64]map[string]struct{})
 		accountType := make(map[string]bool)
 		storage := make(map[uint64]map[string]map[string]struct{})
+		storageCount := 0
 
 		// Create 50 accounts with storage (smaller than PostgreSQL test for ClickHouse)
 		for i := 0; i < 50; i++ {
@@ -242,10 +243,12 @@ func TestClickHouseInsertRange(t *testing.T) {
 			// Add storage for contracts
 			if accountType[addr] {
 				storage[uint64(1000+i)] = make(map[string]map[string]struct{})
+				storage[uint64(1000+i)][addr] = make(map[string]struct{})
 				for j := 0; j < 3; j++ { // 3 storage slots per contract
 					slot := generateClickHouseTestStorageSlot(j)
-					storage[uint64(1000+i)][addr] = map[string]struct{}{slot: {}}
+					storage[uint64(1000+i)][addr][slot] = struct{}{}
 				}
+				storageCount += 3
 			}
 		}
 
@@ -256,11 +259,11 @@ func TestClickHouseInsertRange(t *testing.T) {
 		params := QueryParams{ExpiryBlock: 1200, CurrentBlock: 1300}
 		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry after our test data
 		require.NoError(t, err)
-		assert.Greater(t, accountAnalytics.Total.Total, 0, "Should have accounts")
+		assert.Equal(t, 50, accountAnalytics.Total.Total, "Expected 50 accounts")
 
 		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, storageAnalytics.Total.TotalSlots, 0, "Should have storage")
+		assert.Equal(t, storageCount, storageAnalytics.Total.TotalSlots, "Expected 150 storage slots")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -334,7 +337,7 @@ func TestClickHouseInsertRange(t *testing.T) {
 
 		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Equal(t, storageAnalytics.Total.TotalSlots, 2, "Should have storage from all events")
+		assert.Equal(t, 2, storageAnalytics.Total.TotalSlots, "Should have storage from all events")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -361,11 +364,27 @@ func TestClickHouseInsertRange(t *testing.T) {
 			},
 		}
 
+		storageAccesses := map[uint64]map[string]map[string]struct{}{
+			1000: {
+				"0x1234567890123456789012345678901234567890": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+			},
+			1100: {
+				"0x1234567890123456789012345678901234567890": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+			},
+			1200: {
+				"0x1234567890123456789012345678901234567890": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+			},
+		}
+
 		accountType := map[string]bool{
 			"0x1234567890123456789012345678901234567890": false,
 		}
-
-		storageAccesses := map[uint64]map[string]map[string]struct{}{}
 
 		err := repo.InsertRange(ctx, accountAccesses, accountType, storageAccesses, 1)
 		require.NoError(t, err)
@@ -375,7 +394,11 @@ func TestClickHouseInsertRange(t *testing.T) {
 		params := QueryParams{ExpiryBlock: 1150, CurrentBlock: 1300}
 		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry between blocks 2 and 3
 		require.NoError(t, err)
-		assert.Equal(t, accountAnalytics.Total.Total, 1, "Should have account data")
+		assert.Equal(t, 1, accountAnalytics.Total.Total, "Should have account data")
+
+		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		assert.Equal(t, 1, storageAnalytics.Total.TotalSlots, "Should have storage data")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
