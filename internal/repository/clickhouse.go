@@ -927,10 +927,18 @@ func (r *ClickHouseRepository) getFrequencyAnalysis(ctx context.Context, params 
 // getMostFrequentAccounts gets most frequently accessed accounts
 func (r *ClickHouseRepository) getMostFrequentAccounts(ctx context.Context, topN int) (AccountFrequencyData, error) {
 	query := `
-	SELECT 
-		avg(access_count) as avg_frequency,
-		quantile(0.5)(access_count) as median_frequency
-	FROM account_access_count_agg
+	WITH access_counts AS (
+		SELECT
+			address,
+			argMaxMerge(is_contract_state) AS is_contract,  -- UInt8 flag
+			countMerge(access_count)       AS access_count  -- UInt64
+		FROM mv_account_access_count
+		GROUP BY address
+	)
+	SELECT
+		avg(access_count)           AS avg_frequency,
+		quantile(0.5)(access_count) AS median_frequency
+	FROM access_counts
 	`
 
 	var avgFreq, medianFreq float64
@@ -941,13 +949,21 @@ func (r *ClickHouseRepository) getMostFrequentAccounts(ctx context.Context, topN
 
 	// Get most frequent accounts
 	frequentQuery := `
+	WITH access_counts AS (
+		SELECT
+			address,
+			argMaxMerge(is_contract_state) AS is_contract,  -- UInt8 flag
+			countMerge(access_count)       AS access_count  -- UInt64
+		FROM mv_account_access_count
+		GROUP BY address
+	)
+
 	SELECT 
-		lower(hex(a.address)) as address,
-		ac.access_count,
-		a.is_contract
-	FROM account_access_count_agg ac
-	JOIN accounts_state a ON ac.address = a.address
-	ORDER BY ac.access_count DESC
+		lower(hex(address)) as address,
+		access_count,
+		is_contract
+	FROM access_counts
+	ORDER BY access_count DESC
 	LIMIT ?
 	`
 
@@ -981,10 +997,18 @@ func (r *ClickHouseRepository) getMostFrequentAccounts(ctx context.Context, topN
 // getMostFrequentStorage gets most frequently accessed storage slots
 func (r *ClickHouseRepository) getMostFrequentStorage(ctx context.Context, topN int) (StorageFrequencyData, error) {
 	query := `
+	WITH access_counts AS (
+		SELECT
+			address,
+			slot_key,
+			countMerge(access_count) AS access_count
+		FROM mv_storage_access_count
+		GROUP BY address, slot_key
+	)
 	SELECT 
 		avg(access_count) as avg_frequency,
 		quantile(0.5)(access_count) as median_frequency
-	FROM storage_access_count_agg
+	FROM access_counts
 	`
 
 	var avgFreq, medianFreq float64
@@ -995,11 +1019,19 @@ func (r *ClickHouseRepository) getMostFrequentStorage(ctx context.Context, topN 
 
 	// Get most frequent storage slots
 	frequentQuery := `
+	WITH access_counts AS (
+		SELECT
+			address,
+			slot_key,
+			countMerge(access_count) AS access_count
+		FROM mv_storage_access_count
+		GROUP BY address, slot_key
+	)
 	SELECT 
 		lower(hex(address)) as address,
-		lower(hex(storage_slot)) as storage_slot,
+		lower(hex(slot_key)) as storage_slot,
 		access_count
-	FROM storage_access_count_agg
+	FROM access_counts
 	ORDER BY access_count DESC
 	LIMIT ?
 	`
@@ -1222,25 +1254,41 @@ func (r *ClickHouseRepository) GetTopContractsByTotalSlots(ctx context.Context, 
 	return contracts, nil
 }
 
-// GetTopActivityBlocks gets top activity blocks
+// GetTopActivityBlocks gets top activity blocks using optimized block summary tables
 func (r *ClickHouseRepository) GetTopActivityBlocks(ctx context.Context, startBlock, endBlock uint64, topN int) ([]BlockActivity, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
+	// Use the optimized block summary tables for better performance
 	query := `
 	SELECT 
-		block_number,
-		countIf(is_contract = 0) as eoa_accesses,
-		countIf(is_contract = 1) as contract_accesses,
-		COUNT(*) as account_accesses,
-		(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as storage_accesses
-	FROM account_access aa
-	WHERE block_number >= ? AND block_number <= ?
-	GROUP BY block_number
-	ORDER BY (account_accesses + storage_accesses) DESC
+		COALESCE(a.block_number, s.block_number) as block_number,
+		COALESCE(a.eoa_accesses, 0) as eoa_accesses,
+		COALESCE(a.contract_accesses, 0) as contract_accesses,
+		COALESCE(a.eoa_accesses, 0) + COALESCE(a.contract_accesses, 0) as account_accesses,
+		COALESCE(s.storage_accesses, 0) as storage_accesses,
+		COALESCE(a.eoa_accesses, 0) + COALESCE(a.contract_accesses, 0) + COALESCE(s.storage_accesses, 0) as total_accesses
+	FROM (
+		SELECT 
+			block_number,
+			sum(eoa_accesses) as eoa_accesses,
+			sum(contract_accesses) as contract_accesses
+		FROM accounts_block_summary
+		WHERE block_number >= ? AND block_number <= ?
+		GROUP BY block_number
+	) a
+	FULL OUTER JOIN (
+		SELECT 
+			block_number,
+			sum(storage_accesses) as storage_accesses
+		FROM storage_block_summary
+		WHERE block_number >= ? AND block_number <= ?
+		GROUP BY block_number
+	) s ON a.block_number = s.block_number
+	ORDER BY total_accesses DESC
 	LIMIT ?
 	`
 
-	rows, err := r.db.QueryContext(ctx, query, startBlock, endBlock, topN)
+	rows, err := r.db.QueryContext(ctx, query, startBlock, endBlock, startBlock, endBlock, topN)
 	if err != nil {
 		log.Error("Could not query top activity blocks", "error", err)
 		return nil, fmt.Errorf("could not query top activity blocks: %w", err)
@@ -1251,12 +1299,11 @@ func (r *ClickHouseRepository) GetTopActivityBlocks(ctx context.Context, startBl
 	for rows.Next() {
 		var block BlockActivity
 		err := rows.Scan(&block.BlockNumber, &block.EOAAccesses, &block.ContractAccesses,
-			&block.AccountAccesses, &block.StorageAccesses)
+			&block.AccountAccesses, &block.StorageAccesses, &block.TotalAccesses)
 		if err != nil {
 			log.Error("Could not scan block activity row", "error", err)
 			return nil, fmt.Errorf("could not scan block activity row: %w", err)
 		}
-		block.TotalAccesses = block.AccountAccesses + block.StorageAccesses
 		blocks = append(blocks, block)
 	}
 
@@ -1269,13 +1316,20 @@ func (r *ClickHouseRepository) GetMostFrequentAccounts(ctx context.Context, topN
 	log := logger.GetLogger("clickhouse-repo")
 
 	query := `
+	WITH access_counts AS (
+		SELECT
+			address,
+			argMaxMerge(is_contract_state) AS is_contract,
+			countMerge(access_count) AS access_count
+		FROM account_access_count_agg
+		GROUP BY address
+	)
 	SELECT 
-		lower(hex(a.address)) as address,
-		ac.access_count,
-		a.is_contract
-	FROM account_access_count_agg ac
-	JOIN accounts_state a ON ac.address = a.address
-	ORDER BY ac.access_count DESC
+		lower(hex(address)) as address,
+		access_count,
+		is_contract
+	FROM access_counts
+	ORDER BY access_count DESC
 	LIMIT ?
 	`
 
@@ -1310,11 +1364,19 @@ func (r *ClickHouseRepository) GetMostFrequentStorage(ctx context.Context, topN 
 	log := logger.GetLogger("clickhouse-repo")
 
 	query := `
+	WITH access_counts AS (
+		SELECT
+			address,
+			slot_key,
+			countMerge(access_count) AS access_count
+		FROM storage_access_count_agg
+		GROUP BY address, slot_key
+	)
 	SELECT 
 		lower(hex(address)) as address,
-		lower(hex(storage_slot)) as storage_slot,
+		lower(hex(slot_key)) as storage_slot,
 		access_count
-	FROM storage_access_count_agg
+	FROM access_counts
 	ORDER BY access_count DESC
 	LIMIT ?
 	`
@@ -1344,49 +1406,27 @@ func (r *ClickHouseRepository) GetMostFrequentStorage(ctx context.Context, topN 
 	return storage, nil
 }
 
-// GetTimeSeriesData gets time series data for access patterns
+// GetTimeSeriesData gets time series data for access patterns using optimized block summary tables
 func (r *ClickHouseRepository) GetTimeSeriesData(ctx context.Context, startBlock, endBlock uint64, windowSize int) ([]TimeSeriesPoint, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
+	// Use the optimized combined_block_summary table for better performance
 	query := `
-	WITH window_bounds AS (
-		SELECT 
-			intDiv(block_number, ?) * ? as window_start,
-			(intDiv(block_number, ?) + 1) * ? as window_end,
-			block_number
-		FROM (
-			SELECT DISTINCT block_number
-			FROM account_access
-			WHERE block_number >= ? AND block_number <= ?
-			UNION ALL
-			SELECT DISTINCT block_number
-			FROM storage_access
-			WHERE block_number >= ? AND block_number <= ?
-		)
-	),
-	windowed_data AS (
-		SELECT 
-			window_start,
-			window_end,
-			COUNT(DISTINCT aa.address) as account_accesses,
-			(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number >= wb.window_start AND sa.block_number < wb.window_end) as storage_accesses
-		FROM window_bounds wb
-		LEFT JOIN account_access aa ON aa.block_number >= wb.window_start AND aa.block_number < wb.window_end
-		GROUP BY window_start, window_end
-	)
 	SELECT 
-		window_start,
-		window_end,
-		account_accesses,
-		storage_accesses,
-		account_accesses + storage_accesses as total_accesses,
-		(account_accesses + storage_accesses) / ? as accesses_per_block
-	FROM windowed_data
+		intDiv(block_number, ?) * ? as window_start,
+		(intDiv(block_number, ?) + 1) * ? as window_end,
+		sum(account_access_count) as account_accesses,
+		sum(storage_access_count) as storage_accesses,
+		sum(account_access_count) + sum(storage_access_count) as total_accesses,
+		(sum(account_access_count) + sum(storage_access_count)) / ? as accesses_per_block
+	FROM combined_block_summary
+	WHERE block_number >= ? AND block_number <= ?
+	GROUP BY window_start, window_end
 	ORDER BY window_start
 	`
 
 	rows, err := r.db.QueryContext(ctx, query, windowSize, windowSize, windowSize, windowSize,
-		startBlock, endBlock, startBlock, endBlock, windowSize)
+		windowSize, startBlock, endBlock)
 	if err != nil {
 		log.Error("Could not query time series data", "error", err)
 		return nil, fmt.Errorf("could not query time series data: %w", err)
@@ -1409,26 +1449,19 @@ func (r *ClickHouseRepository) GetTimeSeriesData(ctx context.Context, startBlock
 	return timeSeriesData, nil
 }
 
-// GetAccessRates gets access rate analysis
+// GetAccessRates gets access rate analysis using optimized block summary tables
 func (r *ClickHouseRepository) GetAccessRates(ctx context.Context, startBlock, endBlock uint64) (*AccessRateAnalysis, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
+	// Use the optimized combined_block_summary table for better performance
 	query := `
-	WITH block_stats AS (
-		SELECT 
-			block_number,
-			COUNT(DISTINCT aa.address) as accounts_per_block,
-			(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as storage_per_block
-		FROM account_access aa
-		WHERE block_number >= ? AND block_number <= ?
-		GROUP BY block_number
-	)
 	SELECT 
-		avg(accounts_per_block) as avg_accounts_per_block,
-		avg(storage_per_block) as avg_storage_per_block,
-		avg(accounts_per_block + storage_per_block) as avg_total_per_block,
+		avg(account_access_count) as avg_accounts_per_block,
+		avg(storage_access_count) as avg_storage_per_block,
+		avg(account_access_count + storage_access_count) as avg_total_per_block,
 		COUNT(*) as blocks_analyzed
-	FROM block_stats
+	FROM combined_block_summary
+	WHERE block_number >= ? AND block_number <= ?
 	`
 
 	var avgAccountsPerBlock, avgStoragePerBlock, avgTotalPerBlock float64
@@ -1453,27 +1486,26 @@ func (r *ClickHouseRepository) GetAccessRates(ctx context.Context, startBlock, e
 	return result, nil
 }
 
-// GetTrendAnalysis gets trend analysis
+// GetTrendAnalysis gets trend analysis using optimized block summary tables
 func (r *ClickHouseRepository) GetTrendAnalysis(ctx context.Context, startBlock, endBlock uint64) (*TrendAnalysis, error) {
 	log := logger.GetLogger("clickhouse-repo")
 
+	// Use the optimized combined_block_summary table for better performance
 	query := `
 	WITH block_activity AS (
 		SELECT 
 			block_number,
-			COUNT(DISTINCT aa.address) + (SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as total_activity
-		FROM account_access aa
+			account_access_count + storage_access_count as total_activity
+		FROM combined_block_summary
 		WHERE block_number >= ? AND block_number <= ?
-		GROUP BY block_number
+		ORDER BY block_number
 	),
 	trend_stats AS (
 		SELECT 
-			block_number,
-			total_activity,
-			argMax(total_activity, block_number) as peak_activity,
-			argMin(total_activity, block_number) as low_activity,
-			first_value(total_activity) OVER (ORDER BY block_number) as first_activity,
-			last_value(total_activity) OVER (ORDER BY block_number) as last_activity
+			argMin(total_activity, block_number) as first_activity,
+			argMax(total_activity, block_number) as last_activity,
+			argMax(block_number, total_activity) as peak_activity_block,
+			argMin(block_number, total_activity) as low_activity_block
 		FROM block_activity
 	)
 	SELECT 
@@ -1482,9 +1514,12 @@ func (r *ClickHouseRepository) GetTrendAnalysis(ctx context.Context, startBlock,
 			WHEN last_activity < first_activity * 0.9 THEN 'decreasing'
 			ELSE 'stable'
 		END as trend_direction,
-		(last_activity - first_activity) / first_activity * 100 as growth_rate,
-		argMax(block_number, total_activity) as peak_activity_block,
-		argMin(block_number, total_activity) as low_activity_block
+		CASE 
+			WHEN first_activity > 0 THEN (last_activity - first_activity) / first_activity * 100
+			ELSE 0
+		END as growth_rate,
+		peak_activity_block,
+		low_activity_block
 	FROM trend_stats
 	LIMIT 1
 	`

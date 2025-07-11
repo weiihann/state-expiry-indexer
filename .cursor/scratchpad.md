@@ -444,7 +444,7 @@ The system has undergone a significant architectural simplification:
 - [x] **T2.1**: Complete test suite for `GetAccountAnalytics` (Questions 1, 2, 5a) ✅ **COMPLETED**
 - [x] **T2.2**: Complete test suite for `GetStorageAnalytics` (Questions 3, 4, 5b) ✅ **COMPLETED**
 - [x] **T2.3**: Complete test suite for `GetContractAnalytics` (Questions 7-11, 15) ✅ **COMPLETED**
-- [ ] **T2.4**: Complete test suite for `GetBlockActivityAnalytics` (Questions 6, 12-14)
+- [x] **T2.4**: Complete test suite for `GetBlockActivityAnalytics` (Questions 6, 12-14) ✅ **COMPLETED**
 - [ ] **T2.5**: Complete test suite for `GetUnifiedAnalytics` (All Questions 1-15)
 
 #### Specialized Query Methods Test Suite (Task T3)
@@ -480,14 +480,30 @@ The system has undergone a significant architectural simplification:
 - [ ] **T6.3**: Test automation and quality validation
 
 ### Current Status / Progress Tracking
-- **Current Phase**: Phase 4 - Comprehensive Analytics Test Suite Development
+- **Current Phase**: Phase 4 - Comprehensive Analytics Test Suite Development  
 - **Priority Task**: T2 - Core Analytics Methods Test Suite
 - **Architecture**: ClickHouse-only implementation completed (Phases 1-3)
 - **Completed Tasks**: All analytics implementation tasks (A1-A8) complete, TestClickHouseInsertRange fixed, T1 - Test Infrastructure Foundation complete
 - **Test Infrastructure**: Comprehensive analytics test infrastructure now available with data generators, benchmarking, and error simulation
 - **Analytics Methods Ready for Testing**: All 16 analytics methods implemented and awaiting comprehensive test coverage
-- **Next Steps**: Begin comprehensive testing of core analytics methods (GetAccountAnalytics, GetStorageAnalytics, GetContractAnalytics, GetBlockActivityAnalytics, GetUnifiedAnalytics)
-- **Blockers**: None identified - ready to proceed with core analytics method testing
+
+**Latest Progress Update:**
+- ✅ **T2.4 COMPLETED**: GetBlockActivityAnalytics test suite implementation (Questions 6, 12, 13, 14)
+  - **Performance Optimizations**: Successfully optimized all block activity methods to use pre-aggregated summary tables
+    - `GetTopActivityBlocks`: Now uses `accounts_block_summary` and `storage_block_summary` tables
+    - `GetTimeSeriesData`: Optimized to use `combined_block_summary` table for faster aggregations
+    - `GetAccessRates`: Uses `combined_block_summary` for efficient rate calculations  
+    - `GetTrendAnalysis`: Leverages `combined_block_summary` for optimized trend analysis
+  - **Comprehensive Test Coverage**: Created full test suite with basic functionality, component testing, edge cases, and concurrency validation
+  - **Individual Method Testing**: Validated all component methods with actual data insertion and proper assertions
+  - **Critical Fixes Applied**: 
+    - Fixed ClickHouse window function error in `GetTrendAnalysis` by replacing incompatible `first_value/last_value` with `argMin/argMax`
+    - Fixed aggregate function ordering error in `GetMostFrequentAccounts` by adding proper CTE structure
+    - Fixed field name mismatch in `GetMostFrequentStorage` (corrected `storage_slot` to `slot_key`)
+    - All tests now pass successfully with comprehensive coverage
+
+**Next Steps**: T2.5 - GetUnifiedAnalytics test suite (All Questions 1-15) - **READY TO PROCEED**
+**Status**: All blockers resolved, T2.4 fully complete and validated
 
 ## Executor's Feedback or Assistance Requests
 
