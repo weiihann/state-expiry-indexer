@@ -53,7 +53,9 @@ CREATE TABLE accounts_state (
     is_contract        UInt8,
     last_access_block  UInt64
 ) ENGINE = ReplacingMergeTree(last_access_block)
-ORDER BY (address);
+PARTITION BY intDiv(last_access_block, 1000000)      -- 1M‐block partitions
+ORDER BY (address)
+SETTINGS index_granularity = 8192;
 
 CREATE MATERIALIZED VIEW mv_accounts_state
 TO accounts_state AS
@@ -70,7 +72,9 @@ CREATE TABLE storage_state (
     slot_key           FixedString(32),
     last_access_block  UInt64
 ) ENGINE = ReplacingMergeTree(last_access_block)
-ORDER BY (address, slot_key);
+PARTITION BY intDiv(last_access_block, 1000000)      -- same 1M‐block partitioning
+ORDER BY (address, slot_key)
+SETTINGS index_granularity = 8192;
 
 CREATE MATERIALIZED VIEW mv_storage_state
 TO storage_state AS
