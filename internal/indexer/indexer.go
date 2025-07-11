@@ -298,18 +298,11 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 		"current_range", currentRange)
 
 	// Process ranges sequentially
-	for currentRange <= latestRange {
+	for currentRange < latestRange {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-		}
-
-		// If we caught up to the latest range and the number of blocks have not reached the range size,
-		// we can stop processing and just wait.
-		_, end := s.indexer.rangeProcessor.GetRangeBlockNumbers(currentRange)
-		if end > latestBlock.Uint64()-uint64(s.config.RangeSize) {
-			break
 		}
 
 		// Process the range
@@ -366,7 +359,7 @@ func (s *Service) processAvailableRanges(ctx context.Context) error {
 			"last_indexed_range", currentRange-1)
 	} else {
 		s.log.Info("Caught up to the latest head",
-			"last_indexed_range", lastIndexedRange,
+			"current_range", currentRange,
 			"latest_range", latestRange)
 	}
 
