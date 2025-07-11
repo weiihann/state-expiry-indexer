@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -797,6 +798,811 @@ func TestGetAccountAnalytics(t *testing.T) {
 		// No accounts should be expired
 		assert.Equal(t, 0, result.Expiry.TotalExpired, "No accounts should be expired")
 		assert.Equal(t, 0.0, result.Expiry.ExpiryRate, "Expiry rate should be 0%")
+	})
+}
+
+// TestGetContractAnalytics provides comprehensive testing for the GetContractAnalytics method
+// Tests Questions 7-11, 15: Contract rankings, expiry analysis, volume analysis, and status analysis
+func TestGetContractAnalytics(t *testing.T) {
+	t.Run("BasicFunctionality", func(t *testing.T) {
+		// Setup test with known data distribution focused on contracts
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          5,  // Minimal EOAs
+			NumContracts:     20, // Focus on contracts
+			SlotsPerContract: 4,  // Moderate slot count per contract
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      5, // Half expired
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   100,
+			TopN:         10,
+		}
+
+		// Calculate expected results based on deterministic test data
+		expected := setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Test the method
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate basic structure
+		assert.NotNil(t, result.Rankings)
+		assert.NotNil(t, result.ExpiryAnalysis)
+		assert.NotNil(t, result.VolumeAnalysis)
+		assert.NotNil(t, result.StatusAnalysis)
+
+		// Validate rankings structure
+		assert.NotNil(t, result.Rankings.TopByExpiredSlots)
+		assert.NotNil(t, result.Rankings.TopByTotalSlots)
+
+		// Validate that actual results match expected results from deterministic data
+		AssertContractAnalyticsMatch(t, expected, result, 0.1)
+
+		// Validate data consistency within contract analytics
+		AssertContractAnalyticsConsistency(t, result)
+
+		t.Logf("Contract Analytics Results: TopByExpired=%d, TopByTotal=%d, ContractsAnalyzed=%d",
+			len(result.Rankings.TopByExpiredSlots), len(result.Rankings.TopByTotalSlots),
+			result.ExpiryAnalysis.ContractsAnalyzed)
+		t.Logf("Volume Analysis: AvgStorage=%.2f, MaxStorage=%d, TotalContracts=%d",
+			result.VolumeAnalysis.AverageStoragePerContract, result.VolumeAnalysis.MaxStoragePerContract,
+			result.VolumeAnalysis.TotalContracts)
+		t.Logf("Status Analysis: AllExpired=%d, AllActive=%d, MixedState=%d",
+			result.StatusAnalysis.AllExpiredContracts, result.StatusAnalysis.AllActiveContracts,
+			result.StatusAnalysis.MixedStateContracts)
+	})
+
+	t.Run("ContractRankingValidation", func(t *testing.T) {
+		// Test configuration designed to validate contract ranking logic
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          2,  // Minimal EOAs
+			NumContracts:     15, // Moderate number for ranking
+			SlotsPerContract: 6,  // Higher slot count for better ranking distribution
+			StartBlock:       1,
+			EndBlock:         20,
+			ExpiryBlock:      10, // Middle expiry for mixed results
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         5, // Test top 5 ranking
+		}
+
+		// Calculate expected results
+		_ = setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Get actual results
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate ranking counts match TopN parameter
+		assert.LessOrEqual(t, len(result.Rankings.TopByExpiredSlots), params.TopN,
+			"Top expired slots ranking should not exceed TopN")
+		assert.LessOrEqual(t, len(result.Rankings.TopByTotalSlots), params.TopN,
+			"Top total slots ranking should not exceed TopN")
+
+		// Validate ranking order for expired slots (descending)
+		for i := 1; i < len(result.Rankings.TopByExpiredSlots); i++ {
+			prev := result.Rankings.TopByExpiredSlots[i-1]
+			curr := result.Rankings.TopByExpiredSlots[i]
+			assert.GreaterOrEqual(t, prev.ExpiredSlots, curr.ExpiredSlots,
+				"Expired slots ranking should be in descending order")
+		}
+
+		// Validate ranking order for total slots (descending)
+		for i := 1; i < len(result.Rankings.TopByTotalSlots); i++ {
+			prev := result.Rankings.TopByTotalSlots[i-1]
+			curr := result.Rankings.TopByTotalSlots[i]
+			assert.GreaterOrEqual(t, prev.TotalSlots, curr.TotalSlots,
+				"Total slots ranking should be in descending order")
+		}
+
+		// Validate ranking items have required data
+		for _, item := range result.Rankings.TopByExpiredSlots {
+			assert.NotEmpty(t, item.Address, "Address should not be empty")
+			assert.GreaterOrEqual(t, item.TotalSlots, item.ExpiredSlots,
+				"Total slots should be >= expired slots")
+			assert.Equal(t, item.TotalSlots, item.ExpiredSlots+item.ActiveSlots,
+				"Total should equal expired + active")
+		}
+
+		for _, item := range result.Rankings.TopByTotalSlots {
+			assert.NotEmpty(t, item.Address, "Address should not be empty")
+			assert.GreaterOrEqual(t, item.TotalSlots, 0, "Total slots should be non-negative")
+		}
+
+		t.Logf("Ranking validation passed - TopExpired: %d items, TopTotal: %d items",
+			len(result.Rankings.TopByExpiredSlots), len(result.Rankings.TopByTotalSlots))
+	})
+
+	t.Run("ExpiryAnalysisValidation", func(t *testing.T) {
+		// Test configuration designed to validate expiry distribution analysis
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          3,
+			NumContracts:     12, // Good number for distribution analysis
+			SlotsPerContract: 5,
+			StartBlock:       1,
+			EndBlock:         25,
+			ExpiryBlock:      12, // Strategic expiry point
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   25,
+			TopN:         8,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Get actual results
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate expiry analysis structure
+		assert.GreaterOrEqual(t, result.ExpiryAnalysis.AverageExpiryPercentage, 0.0,
+			"Average expiry percentage should be non-negative")
+		assert.LessOrEqual(t, result.ExpiryAnalysis.AverageExpiryPercentage, 100.0,
+			"Average expiry percentage should not exceed 100%")
+		assert.GreaterOrEqual(t, result.ExpiryAnalysis.MedianExpiryPercentage, 0.0,
+			"Median expiry percentage should be non-negative")
+		assert.LessOrEqual(t, result.ExpiryAnalysis.MedianExpiryPercentage, 100.0,
+			"Median expiry percentage should not exceed 100%")
+		assert.GreaterOrEqual(t, result.ExpiryAnalysis.ContractsAnalyzed, 0,
+			"Contracts analyzed should be non-negative")
+
+		// Validate expiry distribution buckets
+		totalBucketCount := 0
+		for _, bucket := range result.ExpiryAnalysis.ExpiryDistribution {
+			assert.GreaterOrEqual(t, bucket.RangeStart, 0, "Bucket range start should be non-negative")
+			assert.LessOrEqual(t, bucket.RangeEnd, 100, "Bucket range end should not exceed 100")
+			assert.GreaterOrEqual(t, bucket.RangeEnd, bucket.RangeStart,
+				"Bucket range end should be >= start")
+			assert.GreaterOrEqual(t, bucket.Count, 0, "Bucket count should be non-negative")
+			totalBucketCount += bucket.Count
+		}
+
+		// Total bucket count should match contracts analyzed (if we have contracts)
+		if result.ExpiryAnalysis.ContractsAnalyzed > 0 {
+			assert.Equal(t, result.ExpiryAnalysis.ContractsAnalyzed, totalBucketCount,
+				"Sum of bucket counts should equal contracts analyzed")
+		}
+
+		// Validate against expected results
+		AssertContractExpiryAnalysisMatch(t, expected.ExpiryAnalysis, result.ExpiryAnalysis, 0.1)
+
+		t.Logf("Expiry analysis validation - Avg: %.2f%%, Median: %.2f%%, Contracts: %d, Buckets: %d",
+			result.ExpiryAnalysis.AverageExpiryPercentage, result.ExpiryAnalysis.MedianExpiryPercentage,
+			result.ExpiryAnalysis.ContractsAnalyzed, len(result.ExpiryAnalysis.ExpiryDistribution))
+	})
+
+	t.Run("VolumeAnalysisValidation", func(t *testing.T) {
+		// Test configuration designed to validate volume analysis calculations
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          1,  // Minimal EOAs
+			NumContracts:     10, // Good number for volume statistics
+			SlotsPerContract: 8,  // Higher slot count for volume analysis
+			StartBlock:       1,
+			EndBlock:         15,
+			ExpiryBlock:      8,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   20,
+			TopN:         5,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Get actual results
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate volume analysis structure
+		assert.GreaterOrEqual(t, result.VolumeAnalysis.AverageStoragePerContract, 0.0,
+			"Average storage should be non-negative")
+		assert.GreaterOrEqual(t, result.VolumeAnalysis.MedianStoragePerContract, 0.0,
+			"Median storage should be non-negative")
+		assert.GreaterOrEqual(t, result.VolumeAnalysis.MaxStoragePerContract, 0,
+			"Max storage should be non-negative")
+		assert.GreaterOrEqual(t, result.VolumeAnalysis.MinStoragePerContract, 0,
+			"Min storage should be non-negative")
+		assert.GreaterOrEqual(t, result.VolumeAnalysis.TotalContracts, 0,
+			"Total contracts should be non-negative")
+
+		// Validate logical relationships
+		if result.VolumeAnalysis.TotalContracts > 0 {
+			assert.GreaterOrEqual(t, result.VolumeAnalysis.MaxStoragePerContract,
+				result.VolumeAnalysis.MinStoragePerContract,
+				"Max storage should be >= min storage")
+
+			// Average should be between min and max (if we have data)
+			if result.VolumeAnalysis.MinStoragePerContract > 0 {
+				assert.GreaterOrEqual(t, result.VolumeAnalysis.AverageStoragePerContract,
+					float64(result.VolumeAnalysis.MinStoragePerContract),
+					"Average should be >= minimum")
+				assert.LessOrEqual(t, result.VolumeAnalysis.AverageStoragePerContract,
+					float64(result.VolumeAnalysis.MaxStoragePerContract),
+					"Average should be <= maximum")
+			}
+		}
+
+		// Validate against expected results
+		AssertContractVolumeAnalysisMatch(t, expected.VolumeAnalysis, result.VolumeAnalysis, 0.1)
+
+		t.Logf("Volume analysis validation - Avg: %.2f, Median: %.2f, Max: %d, Min: %d, Total: %d",
+			result.VolumeAnalysis.AverageStoragePerContract, result.VolumeAnalysis.MedianStoragePerContract,
+			result.VolumeAnalysis.MaxStoragePerContract, result.VolumeAnalysis.MinStoragePerContract,
+			result.VolumeAnalysis.TotalContracts)
+	})
+
+	t.Run("StatusAnalysisValidation", func(t *testing.T) {
+		// Test configuration designed to validate status analysis breakdown
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          2,
+			NumContracts:     5, // Good number for status distribution
+			SlotsPerContract: 3,
+			StartBlock:       1,
+			EndBlock:         10,
+			ExpiryBlock:      5, // Middle expiry for mixed status
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   30,
+			TopN:         10,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Get actual results
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate status analysis structure
+		assert.GreaterOrEqual(t, result.StatusAnalysis.AllExpiredContracts, 0,
+			"All expired contracts should be non-negative")
+		assert.GreaterOrEqual(t, result.StatusAnalysis.AllActiveContracts, 0,
+			"All active contracts should be non-negative")
+		assert.GreaterOrEqual(t, result.StatusAnalysis.MixedStateContracts, 0,
+			"Mixed state contracts should be non-negative")
+		assert.GreaterOrEqual(t, result.StatusAnalysis.ActiveWithExpiredStorage, 0,
+			"Active with expired storage should be non-negative")
+
+		// Validate percentage calculations
+		assert.GreaterOrEqual(t, result.StatusAnalysis.AllExpiredRate, 0.0,
+			"All expired rate should be non-negative")
+		assert.LessOrEqual(t, result.StatusAnalysis.AllExpiredRate, 100.0,
+			"All expired rate should not exceed 100%")
+		assert.GreaterOrEqual(t, result.StatusAnalysis.AllActiveRate, 0.0,
+			"All active rate should be non-negative")
+		assert.LessOrEqual(t, result.StatusAnalysis.AllActiveRate, 100.0,
+			"All active rate should not exceed 100%")
+
+		// Validate logical relationships in status analysis
+		totalStatusContracts := result.StatusAnalysis.AllExpiredContracts +
+			result.StatusAnalysis.AllActiveContracts +
+			result.StatusAnalysis.MixedStateContracts
+
+		// Should match volume analysis total if consistent
+		if result.VolumeAnalysis.TotalContracts > 0 {
+			// Allow for potential differences in counting methods
+			assert.InDelta(t, result.VolumeAnalysis.TotalContracts, totalStatusContracts,
+				float64(result.VolumeAnalysis.TotalContracts)*0.1,
+				"Status analysis total should be close to volume analysis total")
+		}
+
+		// Validate against expected results
+		AssertContractStatusAnalysisMatch(t, expected.StatusAnalysis, result.StatusAnalysis, 0.1)
+
+		t.Logf("Status analysis validation - AllExpired: %d, AllActive: %d, Mixed: %d, ActiveWithExpired: %d",
+			result.StatusAnalysis.AllExpiredContracts, result.StatusAnalysis.AllActiveContracts,
+			result.StatusAnalysis.MixedStateContracts, result.StatusAnalysis.ActiveWithExpiredStorage)
+		t.Logf("Status rates - AllExpired: %.2f%%, AllActive: %.2f%%",
+			result.StatusAnalysis.AllExpiredRate, result.StatusAnalysis.AllActiveRate)
+	})
+
+	t.Run("EmptyDatabase", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          0,
+			NumContracts:     0,
+			SlotsPerContract: 0,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      50,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   10,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have empty rankings
+		assert.Equal(t, 0, len(result.Rankings.TopByExpiredSlots))
+		assert.Equal(t, 0, len(result.Rankings.TopByTotalSlots))
+
+		// Should have zero expiry analysis
+		assert.True(t, math.IsNaN(result.ExpiryAnalysis.AverageExpiryPercentage))
+		assert.True(t, math.IsNaN(result.ExpiryAnalysis.MedianExpiryPercentage))
+		assert.Equal(t, 0, result.ExpiryAnalysis.ContractsAnalyzed)
+		assert.Equal(t, 0, len(result.ExpiryAnalysis.ExpiryDistribution))
+
+		// Should have zero volume analysis
+		assert.True(t, math.IsNaN(result.VolumeAnalysis.AverageStoragePerContract))
+		assert.True(t, math.IsNaN(result.VolumeAnalysis.MedianStoragePerContract))
+		assert.Equal(t, 0, result.VolumeAnalysis.MaxStoragePerContract)
+		assert.Equal(t, 0, result.VolumeAnalysis.MinStoragePerContract)
+		assert.Equal(t, 0, result.VolumeAnalysis.TotalContracts)
+
+		// Should have zero status analysis
+		assert.Equal(t, 0, result.StatusAnalysis.AllExpiredContracts)
+		assert.Equal(t, 0, result.StatusAnalysis.AllActiveContracts)
+		assert.Equal(t, 0, result.StatusAnalysis.MixedStateContracts)
+		assert.Equal(t, 0, result.StatusAnalysis.ActiveWithExpiredStorage)
+	})
+
+	t.Run("OnlyEOAs", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          50, // Only EOAs, no contracts
+			NumContracts:     0,
+			SlotsPerContract: 0,
+			StartBlock:       1,
+			EndBlock:         200,
+			ExpiryBlock:      100,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   20,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have empty rankings (no contracts)
+		assert.Equal(t, 0, len(result.Rankings.TopByExpiredSlots))
+		assert.Equal(t, 0, len(result.Rankings.TopByTotalSlots))
+
+		// Should have zero contract analysis
+		assert.Equal(t, 0, result.ExpiryAnalysis.ContractsAnalyzed)
+		assert.Equal(t, 0, result.VolumeAnalysis.TotalContracts)
+		assert.Equal(t, 0, result.StatusAnalysis.AllExpiredContracts+
+			result.StatusAnalysis.AllActiveContracts+
+			result.StatusAnalysis.MixedStateContracts)
+	})
+
+	t.Run("SingleContract", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          5,
+			NumContracts:     1, // Single contract
+			SlotsPerContract: 10,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      50,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Should have at most 1 item in rankings
+		assert.Equal(t, 1, len(result.Rankings.TopByExpiredSlots))
+		assert.Equal(t, 1, len(result.Rankings.TopByTotalSlots))
+
+		// Should have analysis for 1 contract
+		if result.ExpiryAnalysis.ContractsAnalyzed > 0 {
+			assert.Equal(t, 1, result.ExpiryAnalysis.ContractsAnalyzed)
+		}
+		if result.VolumeAnalysis.TotalContracts > 0 {
+			assert.Equal(t, 1, result.VolumeAnalysis.TotalContracts)
+			// For single contract, average should equal min and max
+			assert.Equal(t, result.VolumeAnalysis.AverageStoragePerContract,
+				float64(result.VolumeAnalysis.MaxStoragePerContract))
+			assert.Equal(t, result.VolumeAnalysis.MaxStoragePerContract,
+				result.VolumeAnalysis.MinStoragePerContract)
+		}
+	})
+
+	t.Run("AllContractsExpired", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          10,
+			NumContracts:     8,
+			SlotsPerContract: 5,
+			StartBlock:       1,
+			EndBlock:         100,
+			ExpiryBlock:      200, // All should be expired (expiry after end)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.ExpiryBlock + 100,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   50,
+			TopN:         5,
+		}
+
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// All contracts should be fully expired
+		if result.StatusAnalysis.AllExpiredContracts+result.StatusAnalysis.AllActiveContracts+
+			result.StatusAnalysis.MixedStateContracts > 0 {
+			// All contracts should be in expired state
+			totalContracts := result.StatusAnalysis.AllExpiredContracts +
+				result.StatusAnalysis.AllActiveContracts +
+				result.StatusAnalysis.MixedStateContracts
+			assert.Equal(t, totalContracts, result.StatusAnalysis.AllExpiredContracts,
+				"All contracts should be expired")
+			assert.Equal(t, 100.0, result.StatusAnalysis.AllExpiredRate,
+				"All expired rate should be 100%")
+		}
+
+		// Expiry analysis should show high expiry percentages
+		if result.ExpiryAnalysis.ContractsAnalyzed > 0 {
+			assert.GreaterOrEqual(t, result.ExpiryAnalysis.AverageExpiryPercentage, 90.0,
+				"Average expiry should be very high")
+		}
+	})
+
+	t.Run("AllContractsActive", func(t *testing.T) {
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          15,
+			NumContracts:     12,
+			SlotsPerContract: 6,
+			StartBlock:       1,
+			EndBlock:         500,
+			ExpiryBlock:      1, // All should be active (expiry before start)
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   100,
+			TopN:         8,
+		}
+
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// All contracts should be fully active
+		if result.StatusAnalysis.AllExpiredContracts+result.StatusAnalysis.AllActiveContracts+
+			result.StatusAnalysis.MixedStateContracts > 0 {
+			// All contracts should be in active state
+			totalContracts := result.StatusAnalysis.AllExpiredContracts +
+				result.StatusAnalysis.AllActiveContracts +
+				result.StatusAnalysis.MixedStateContracts
+			assert.Equal(t, totalContracts, result.StatusAnalysis.AllActiveContracts,
+				"All contracts should be active")
+			assert.Equal(t, 100.0, result.StatusAnalysis.AllActiveRate,
+				"All active rate should be 100%")
+		}
+
+		// Expiry analysis should show low expiry percentages
+		if result.ExpiryAnalysis.ContractsAnalyzed > 0 {
+			assert.LessOrEqual(t, result.ExpiryAnalysis.AverageExpiryPercentage, 10.0,
+				"Average expiry should be very low")
+		}
+	})
+
+	t.Run("ParameterValidation", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+
+		t.Run("InvalidTopN", func(t *testing.T) {
+			params := QueryParams{
+				ExpiryBlock:  50,
+				CurrentBlock: 100,
+				StartBlock:   1,
+				EndBlock:     100,
+				WindowSize:   10,
+				TopN:         0, // Invalid TopN
+			}
+
+			// Should handle invalid TopN gracefully
+			result, err := setup.Repository.GetContractAnalytics(ctx, params)
+			if err != nil {
+				t.Logf("Expected error for invalid TopN: %v", err)
+			} else {
+				require.NotNil(t, result)
+				// Rankings should be empty or handle gracefully
+				t.Logf("Method handled invalid TopN gracefully")
+			}
+		})
+
+		t.Run("LargeTopN", func(t *testing.T) {
+			params := QueryParams{
+				ExpiryBlock:  50,
+				CurrentBlock: 100,
+				StartBlock:   1,
+				EndBlock:     100,
+				WindowSize:   10,
+				TopN:         1000, // Very large TopN
+			}
+
+			result, err := setup.Repository.GetContractAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Should handle large TopN gracefully (might return fewer items)
+			t.Logf("Method handled large TopN gracefully - returned %d/%d and %d/%d items",
+				len(result.Rankings.TopByExpiredSlots), params.TopN,
+				len(result.Rankings.TopByTotalSlots), params.TopN)
+		})
+
+		t.Run("ExpiryBlockEdgeCases", func(t *testing.T) {
+			params := QueryParams{
+				ExpiryBlock:  0, // Edge case: expiry at genesis
+				CurrentBlock: 100,
+				StartBlock:   1,
+				EndBlock:     100,
+				WindowSize:   50,
+				TopN:         5,
+			}
+
+			result, err := setup.Repository.GetContractAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			t.Logf("Method handled expiry at genesis gracefully")
+		})
+	})
+
+	t.Run("ConcurrencyTesting", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  50,
+			CurrentBlock: 100,
+			StartBlock:   1,
+			EndBlock:     100,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Test concurrent access
+		const numGoroutines = 6
+		results := make(chan error, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func(routineID int) {
+				defer func() {
+					if r := recover(); r != nil {
+						results <- assert.AnError
+					}
+				}()
+
+				analytics, err := setup.Repository.GetContractAnalytics(ctx, params)
+				if err != nil {
+					results <- err
+					return
+				}
+
+				if analytics == nil {
+					results <- assert.AnError
+					return
+				}
+
+				// Validate basic structure consistency
+				if analytics == nil {
+					results <- assert.AnError
+					return
+				}
+
+				// Validate ranking consistency
+				for _, item := range analytics.Rankings.TopByExpiredSlots {
+					if item.TotalSlots < item.ExpiredSlots {
+						results <- assert.AnError
+						return
+					}
+				}
+
+				results <- nil
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < numGoroutines; i++ {
+			err := <-results
+			assert.NoError(t, err, "Concurrent access should not cause errors")
+		}
+
+		t.Logf("Concurrency test completed successfully with %d goroutines", numGoroutines)
+	})
+
+	t.Run("ErrorScenarios", func(t *testing.T) {
+		setup := SetupAnalyticsTestWithDefaults(t)
+		defer setup.Cleanup()
+
+		params := QueryParams{
+			ExpiryBlock:  50,
+			CurrentBlock: 100,
+			StartBlock:   1,
+			EndBlock:     100,
+			WindowSize:   50,
+			TopN:         10,
+		}
+
+		// Test with cancelled context
+		t.Run("CancelledContext", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // Cancel immediately
+
+			_, err := setup.Repository.GetContractAnalytics(ctx, params)
+			if err != nil {
+				assert.Contains(t, err.Error(), "context", "Should handle cancelled context")
+				t.Logf("Correctly handled cancelled context: %v", err)
+			} else {
+				t.Logf("Method completed despite cancelled context")
+			}
+		})
+
+		// Test with timeout context
+		t.Run("TimeoutContext", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+			defer cancel()
+
+			_, err := setup.Repository.GetContractAnalytics(ctx, params)
+			if err != nil {
+				t.Logf("Correctly handled timeout context: %v", err)
+			} else {
+				t.Logf("Method completed despite timeout context")
+			}
+		})
+	})
+
+	t.Run("DeterministicDataValidation", func(t *testing.T) {
+		// Test with specific configuration to validate deterministic behavior
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          5,
+			NumContracts:     10,
+			SlotsPerContract: 4,
+			StartBlock:       1,
+			EndBlock:         20,
+			ExpiryBlock:      10,
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   25,
+			TopN:         5,
+		}
+
+		// Calculate expected results
+		expected := setup.TestData.CalculateExpectedContractAnalytics(config.ExpiryBlock, params.TopN)
+
+		// Get actual results
+		result, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Multiple calls should return consistent results
+		result2, err := setup.Repository.GetContractAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result2)
+
+		// Compare key metrics for consistency
+		assert.Equal(t, result.ExpiryAnalysis.ContractsAnalyzed,
+			result2.ExpiryAnalysis.ContractsAnalyzed,
+			"Contracts analyzed should be consistent")
+		assert.Equal(t, result.VolumeAnalysis.TotalContracts,
+			result2.VolumeAnalysis.TotalContracts,
+			"Total contracts should be consistent")
+		assert.Equal(t, len(result.Rankings.TopByExpiredSlots),
+			len(result2.Rankings.TopByExpiredSlots),
+			"Top expired slots ranking count should be consistent")
+		assert.Equal(t, len(result.Rankings.TopByTotalSlots),
+			len(result2.Rankings.TopByTotalSlots),
+			"Top total slots ranking count should be consistent")
+
+		// Validate against expected deterministic results
+		AssertContractAnalyticsMatch(t, expected, result, 0.1)
+
+		t.Logf("Deterministic validation passed - consistent results across multiple calls")
 	})
 }
 
