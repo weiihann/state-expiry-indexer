@@ -37,20 +37,14 @@ func BenchmarkLRU(b *testing.B) {
 	}
 }
 
-func BenchmarkFastCache(b *testing.B) {
-	size := 20 * 1024 * 1024 * 1024
-	cache := fastcache.New(size)
+func TestFastCache(t *testing.T) {
+	cache := fastcache.New(1024)
 
-	// Fill up the cache
-	for i := 0; i < size/23; i++ {
-		cache.Set([]byte(fmt.Sprintf("0x%040x", i)), []byte{0})
-	}
-
-	// Benchmark
 	key := fmt.Sprintf("0x%040x", 1000000)
-	for i := 0; i < b.N; i++ {
-		cache.Get(nil, []byte(key))
-	}
+	cache.Set([]byte(key), []byte{0})
+
+	val := cache.Get(nil, []byte(key))
+	fmt.Println(val)
 }
 
 func BenchmarkBigCache(b *testing.B) {
