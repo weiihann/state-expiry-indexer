@@ -1606,6 +1606,376 @@ func TestGetContractAnalytics(t *testing.T) {
 	})
 }
 
+// TestGetBlockActivityAnalytics provides comprehensive testing for the GetBlockActivityAnalytics method
+// Tests Questions 6, 12, 13, 14: Top activity blocks, time series data, access rates, and trend analysis
+func TestGetBlockActivityAnalytics(t *testing.T) {
+	t.Run("BasicFunctionality", func(t *testing.T) {
+		// Setup test with known data distribution for block activity analysis
+		config := AnalyticsTestDataConfig{
+			NumEOAs:          10,
+			NumContracts:     15,
+			SlotsPerContract: 4,
+			StartBlock:       1,
+			EndBlock:         20,
+			ExpiryBlock:      10, // Middle expiry point
+		}
+
+		setup := SetupAnalyticsTest(t, config)
+		defer setup.Cleanup()
+
+		ctx := context.Background()
+		params := QueryParams{
+			ExpiryBlock:  config.ExpiryBlock,
+			CurrentBlock: config.EndBlock,
+			StartBlock:   config.StartBlock,
+			EndBlock:     config.EndBlock,
+			WindowSize:   5, // Small window for detailed time series
+			TopN:         5,
+		}
+
+		// Test the method
+		result, err := setup.Repository.GetBlockActivityAnalytics(ctx, params)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Validate basic structure
+		assert.NotNil(t, result.TopBlocks)
+		assert.NotNil(t, result.TimeSeriesData)
+		assert.NotNil(t, result.AccessRates)
+		assert.NotNil(t, result.FrequencyData)
+		assert.NotNil(t, result.TrendData)
+
+		t.Logf("Block Activity Analytics Results: TopBlocks=%d, TimeSeriesPoints=%d, BlocksAnalyzed=%d",
+			len(result.TopBlocks), len(result.TimeSeriesData), result.AccessRates.BlocksAnalyzed)
+		t.Logf("Access Rates: AccountsPerBlock=%.2f, StoragePerBlock=%.2f, TotalPerBlock=%.2f",
+			result.AccessRates.AccountsPerBlock, result.AccessRates.StoragePerBlock,
+			result.AccessRates.TotalAccessesPerBlock)
+		t.Logf("Trend: Direction=%s, GrowthRate=%.2f%%, PeakBlock=%d, LowBlock=%d",
+			result.TrendData.TrendDirection, result.TrendData.GrowthRate,
+			result.TrendData.PeakActivityBlock, result.TrendData.LowActivityBlock)
+	})
+
+	t.Run("TopBlocksValidation", func(t *testing.T) {
+		// Setup basic test repository
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Insert some test data
+		accounts := map[uint64]map[string]struct{}{
+			100: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+			},
+			101: {
+				"0x1234567890123456789012345678901234567890": {},
+			},
+		}
+		accountType := map[string]bool{
+			"0x1234567890123456789012345678901234567890": false,
+			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": true,
+		}
+		storage := map[uint64]map[string]map[string]struct{}{
+			100: {
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+					"0x0000000000000000000000000000000000000000000000000000000000000002": {},
+				},
+			},
+		}
+
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
+		require.NoError(t, err)
+
+		// Test GetTopActivityBlocks directly
+		blocks, err := repo.GetTopActivityBlocks(ctx, 100, 101, 5)
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, len(blocks))
+
+		// Validate block 100
+		assert.Equal(t, uint64(100), blocks[0].BlockNumber)
+		assert.Equal(t, 1, blocks[0].EOAAccesses)
+		assert.Equal(t, 1, blocks[0].ContractAccesses)
+		assert.Equal(t, 2, blocks[0].StorageAccesses)
+		assert.Equal(t, 4, blocks[0].TotalAccesses)
+
+		// Validate block 101
+		assert.Equal(t, uint64(101), blocks[1].BlockNumber)
+		assert.Equal(t, 1, blocks[1].EOAAccesses)
+		assert.Equal(t, 0, blocks[1].StorageAccesses)
+		assert.Equal(t, 0, blocks[1].ContractAccesses)
+		assert.Equal(t, 1, blocks[1].TotalAccesses)
+
+		// Validate top blocks structure
+		assert.LessOrEqual(t, len(blocks), 5)
+		for _, block := range blocks {
+			assert.GreaterOrEqual(t, block.BlockNumber, uint64(100))
+			assert.LessOrEqual(t, block.BlockNumber, uint64(101))
+			assert.GreaterOrEqual(t, block.TotalAccesses, 0)
+		}
+
+		t.Logf("Top blocks validation passed - returned %d blocks", len(blocks))
+	})
+
+	t.Run("ComponentMethodsTesting", func(t *testing.T) {
+		// Test individual component methods directly
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		ctx := context.Background()
+
+		// Insert some test data
+		accounts := map[uint64]map[string]struct{}{
+			50: {
+				"0x1234567890123456789012345678901234567890": {},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+			},
+		}
+		accountType := map[string]bool{
+			"0x1234567890123456789012345678901234567890": false,
+			"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": true,
+		}
+		storage := map[uint64]map[string]map[string]struct{}{
+			50: {
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+			},
+		}
+
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
+		require.NoError(t, err)
+
+		t.Run("GetTopActivityBlocks", func(t *testing.T) {
+			blocks, err := repo.GetTopActivityBlocks(ctx, 1, 100, 5)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(blocks), 5)
+			for _, block := range blocks {
+				assert.GreaterOrEqual(t, block.BlockNumber, uint64(1))
+				assert.LessOrEqual(t, block.BlockNumber, uint64(100))
+				assert.GreaterOrEqual(t, block.TotalAccesses, 0)
+			}
+			t.Logf("GetTopActivityBlocks returned %d blocks", len(blocks))
+		})
+
+		t.Run("GetTimeSeriesData", func(t *testing.T) {
+			series, err := repo.GetTimeSeriesData(ctx, 1, 100, 10)
+			require.NoError(t, err)
+			for _, point := range series {
+				assert.GreaterOrEqual(t, point.WindowStart, uint64(1))
+				assert.GreaterOrEqual(t, point.TotalAccesses, 0)
+				assert.GreaterOrEqual(t, point.AccessesPerBlock, 0.0)
+			}
+			t.Logf("GetTimeSeriesData returned %d points", len(series))
+		})
+
+		t.Run("GetAccessRates", func(t *testing.T) {
+			rates, err := repo.GetAccessRates(ctx, 1, 100)
+			require.NoError(t, err)
+			require.NotNil(t, rates)
+			assert.GreaterOrEqual(t, rates.AccountsPerBlock, 0.0)
+			assert.GreaterOrEqual(t, rates.StoragePerBlock, 0.0)
+			assert.GreaterOrEqual(t, rates.TotalAccessesPerBlock, 0.0)
+			t.Logf("GetAccessRates: Accounts=%.2f, Storage=%.2f, Total=%.2f",
+				rates.AccountsPerBlock, rates.StoragePerBlock, rates.TotalAccessesPerBlock)
+		})
+
+		t.Run("GetTrendAnalysis", func(t *testing.T) {
+			trend, err := repo.GetTrendAnalysis(ctx, 1, 100)
+			require.NoError(t, err)
+			require.NotNil(t, trend)
+			assert.Contains(t, []string{"increasing", "decreasing", "stable"}, trend.TrendDirection)
+			t.Logf("GetTrendAnalysis: Direction=%s, Growth=%.2f%%",
+				trend.TrendDirection, trend.GrowthRate)
+		})
+
+		t.Run("GetMostFrequentAccounts", func(t *testing.T) {
+			accounts, err := repo.GetMostFrequentAccounts(ctx, 5)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(accounts), 5)
+			for _, account := range accounts {
+				assert.NotEmpty(t, account.Address)
+				assert.GreaterOrEqual(t, account.AccessCount, 1)
+			}
+			t.Logf("GetMostFrequentAccounts returned %d accounts", len(accounts))
+		})
+
+		t.Run("GetMostFrequentStorage", func(t *testing.T) {
+			storage, err := repo.GetMostFrequentStorage(ctx, 5)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(storage), 5)
+			for _, slot := range storage {
+				assert.NotEmpty(t, slot.Address)
+				assert.NotEmpty(t, slot.StorageSlot)
+				assert.GreaterOrEqual(t, slot.AccessCount, 1)
+			}
+			t.Logf("GetMostFrequentStorage returned %d slots", len(storage))
+		})
+	})
+
+	t.Run("EdgeCases", func(t *testing.T) {
+		t.Run("EmptyDatabase", func(t *testing.T) {
+			repo, cleanup := setupClickHouseTestRepository(t)
+			defer cleanup()
+
+			ctx := context.Background()
+			params := QueryParams{
+				ExpiryBlock:  50,
+				CurrentBlock: 100,
+				StartBlock:   1,
+				EndBlock:     100,
+				WindowSize:   10,
+				TopN:         5,
+			}
+
+			result, err := repo.GetBlockActivityAnalytics(ctx, params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Should have empty results
+			assert.Equal(t, 0, len(result.TopBlocks))
+			assert.Equal(t, 0, len(result.TimeSeriesData))
+			assert.Equal(t, 0, result.AccessRates.BlocksAnalyzed)
+			assert.Equal(t, 0, len(result.FrequencyData.AccountFrequency.MostFrequentAccounts))
+			assert.Equal(t, 0, len(result.FrequencyData.StorageFrequency.MostFrequentSlots))
+
+			// Rates should be zero or NaN for empty data
+			if !math.IsNaN(result.AccessRates.AccountsPerBlock) {
+				assert.Equal(t, 0.0, result.AccessRates.AccountsPerBlock)
+			}
+			if !math.IsNaN(result.AccessRates.StoragePerBlock) {
+				assert.Equal(t, 0.0, result.AccessRates.StoragePerBlock)
+			}
+		})
+
+		t.Run("ParameterValidation", func(t *testing.T) {
+			repo, cleanup := setupClickHouseTestRepository(t)
+			defer cleanup()
+
+			ctx := context.Background()
+
+			t.Run("InvalidTopN", func(t *testing.T) {
+				params := QueryParams{
+					ExpiryBlock:  50,
+					CurrentBlock: 100,
+					StartBlock:   1,
+					EndBlock:     100,
+					WindowSize:   10,
+					TopN:         0, // Invalid TopN
+				}
+
+				// Should handle invalid TopN gracefully
+				result, err := repo.GetBlockActivityAnalytics(ctx, params)
+				if err != nil {
+					t.Logf("Expected error for invalid TopN: %v", err)
+				} else {
+					require.NotNil(t, result)
+					// Should return empty or minimal results for top blocks
+					t.Logf("Method handled invalid TopN gracefully")
+				}
+			})
+
+			t.Run("InvalidWindowSize", func(t *testing.T) {
+				params := QueryParams{
+					ExpiryBlock:  50,
+					CurrentBlock: 100,
+					StartBlock:   1,
+					EndBlock:     100,
+					WindowSize:   0, // Invalid window size
+					TopN:         10,
+				}
+
+				// Should handle invalid window size gracefully
+				result, err := repo.GetBlockActivityAnalytics(ctx, params)
+				if err != nil {
+					t.Logf("Expected error for invalid window size: %v", err)
+				} else {
+					require.NotNil(t, result)
+					t.Logf("Method handled invalid window size gracefully")
+				}
+			})
+		})
+	})
+
+	t.Run("ConcurrencyTesting", func(t *testing.T) {
+		repo, cleanup := setupClickHouseTestRepository(t)
+		defer cleanup()
+
+		// Insert some test data first
+		ctx := context.Background()
+		accounts := map[uint64]map[string]struct{}{
+			50: {"0x1234567890123456789012345678901234567890": {}},
+		}
+		accountType := map[string]bool{
+			"0x1234567890123456789012345678901234567890": false,
+		}
+		storage := map[uint64]map[string]map[string]struct{}{}
+
+		err := repo.InsertRange(ctx, accounts, accountType, storage, 1)
+		require.NoError(t, err)
+
+		params := QueryParams{
+			ExpiryBlock:  50,
+			CurrentBlock: 100,
+			StartBlock:   1,
+			EndBlock:     100,
+			WindowSize:   20,
+			TopN:         10,
+		}
+
+		// Test concurrent access
+		const numGoroutines = 4
+		results := make(chan error, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func(routineID int) {
+				defer func() {
+					if r := recover(); r != nil {
+						results <- fmt.Errorf("panic in goroutine %d: %v", routineID, r)
+					}
+				}()
+
+				analytics, err := repo.GetBlockActivityAnalytics(ctx, params)
+				if err != nil {
+					results <- err
+					return
+				}
+
+				if analytics == nil {
+					results <- fmt.Errorf("got nil analytics")
+					return
+				}
+
+				// Validate basic structure consistency
+				if analytics.TopBlocks == nil || analytics.TimeSeriesData == nil {
+					results <- fmt.Errorf("missing structure components")
+					return
+				}
+
+				// Validate top blocks ordering consistency
+				for j := 1; j < len(analytics.TopBlocks); j++ {
+					if analytics.TopBlocks[j-1].TotalAccesses < analytics.TopBlocks[j].TotalAccesses {
+						results <- fmt.Errorf("ordering violation in top blocks")
+						return
+					}
+				}
+
+				results <- nil
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < numGoroutines; i++ {
+			err := <-results
+			assert.NoError(t, err, "Concurrent access should not cause errors")
+		}
+
+		t.Logf("Concurrency test completed successfully with %d goroutines", numGoroutines)
+	})
+}
+
 // TestGetStorageAnalytics provides comprehensive testing for the GetStorageAnalytics method
 // Tests Questions 3, 4, and 5b: Total storage slots, Expired storage slots, and Single access storage slots
 func TestGetStorageAnalytics(t *testing.T) {

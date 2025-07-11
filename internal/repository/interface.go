@@ -30,7 +30,7 @@ type StateRepositoryInterface interface {
 	// Single query using accounts_state and account_access_count_agg tables
 	GetAccountAnalytics(ctx context.Context, params QueryParams) (*AccountAnalytics, error)
 
-	// Storage Analytics (Questions 3, 4, 5b) 
+	// Storage Analytics (Questions 3, 4, 5b)
 	// Single query using storage_state and storage_access_count_agg tables
 	GetStorageAnalytics(ctx context.Context, params QueryParams) (*StorageAnalytics, error)
 
@@ -47,7 +47,7 @@ type StateRepositoryInterface interface {
 	GetUnifiedAnalytics(ctx context.Context, params QueryParams) (*UnifiedAnalytics, error)
 
 	// ==============================================================================
-	// SPECIALIZED EFFICIENT QUERIES 
+	// SPECIALIZED EFFICIENT QUERIES
 	// ==============================================================================
 
 	// Get basic statistics in a single query for quick overview
@@ -61,13 +61,9 @@ type StateRepositoryInterface interface {
 	GetMostFrequentStorage(ctx context.Context, topN int) ([]FrequentStorage, error)
 
 	// Time series queries using pre-aggregated data
-	GetTimeSeriesData(ctx context.Context, startBlock, endBlock uint64, windowSize int) ([]TimeSeriesPoint, error)
 	GetAccessRates(ctx context.Context, startBlock, endBlock uint64) (*AccessRateAnalysis, error)
+	GetTimeSeriesData(ctx context.Context, startBlock, endBlock uint64, windowSize int) ([]TimeSeriesPoint, error)
 	GetTrendAnalysis(ctx context.Context, startBlock, endBlock uint64) (*TrendAnalysis, error)
-
-	// Contract-specific queries
-	GetContractExpiryDistribution(ctx context.Context, expiryBlock uint64) ([]ExpiryDistributionBucket, error)
-	GetContractStatusBreakdown(ctx context.Context, expiryBlock uint64) (*ContractStatusAnalysis, error)
 }
 
 // AdvancedAnalyticsError represents errors for unsupported advanced analytics operations
