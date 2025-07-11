@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -171,8 +172,17 @@ func (r *ClickHouseRepository) insertAllAccountAccessEventsInTx(
 	var values []interface{}
 	var placeholders []string
 
-	for blockNumber, access := range accountAccesses {
-		for addr := range access {
+	// Sort the account accesses by block number
+	blockNumbers := make([]uint64, 0, len(accountAccesses))
+	for blockNumber := range accountAccesses {
+		blockNumbers = append(blockNumbers, blockNumber)
+	}
+	sort.Slice(blockNumbers, func(i, j int) bool {
+		return blockNumbers[i] < blockNumbers[j]
+	})
+
+	for _, blockNumber := range blockNumbers {
+		for addr := range accountAccesses[blockNumber] {
 			// Clean the address hex string (remove 0x prefix and ensure proper length)
 			addressHex := strings.TrimPrefix(addr, "0x")
 
@@ -232,8 +242,18 @@ func (r *ClickHouseRepository) insertAllStorageAccessEventsInTx(ctx context.Cont
 	var values []interface{}
 	var placeholders []string
 
+	// Sort the storage accesses by block number
+	blockNumbers := make([]uint64, 0, len(storageAccesses))
+	for blockNumber := range storageAccesses {
+		blockNumbers = append(blockNumbers, blockNumber)
+	}
+	sort.Slice(blockNumbers, func(i, j int) bool {
+		return blockNumbers[i] < blockNumbers[j]
+	})
+
 	for blockNumber, record := range storageAccesses {
 		for addr, slot := range record {
+
 			// Clean the address hex string (remove 0x prefix and ensure proper length)
 			addressHex := strings.TrimPrefix(addr, "0x")
 			if len(addressHex) != 40 {
@@ -284,38 +304,43 @@ func (r *ClickHouseRepository) GetAccountAnalytics(ctx context.Context, params Q
 
 	// Single optimized query using materialized views and aggregated tables
 	query := `
-	WITH account_stats AS (
-		SELECT 
-			countIf(is_contract = 0) as total_eoas,
-			countIf(is_contract = 1) as total_contracts,
-			countIf(is_contract = 0 AND last_access_block <= ?) as expired_eoas,
-			countIf(is_contract = 1 AND last_access_block <= ?) as expired_contracts
+	WITH
+	account_stats AS (
+		SELECT
+		countIf(is_contract = 0)                                     AS total_eoas,
+		countIf(is_contract = 1)                                     AS total_contracts,
+		countIf(is_contract = 0 AND last_access_block < ?)         AS expired_eoas,
+		countIf(is_contract = 1 AND last_access_block < ?)         AS expired_contracts
 		FROM accounts_state
+		FINAL
 	),
+
 	access_counts AS (
-		SELECT 
-			a.address,
-			a.is_contract,
-			countMerge(ac.access_count) as access_count
-		FROM accounts_state a
-		INNER JOIN account_access_count_agg ac ON a.address = ac.address
-		GROUP BY a.address, a.is_contract
+		SELECT
+		address,
+		argMaxMerge(is_contract_state) AS is_contract,
+		countMerge(access_count)       AS access_count
+		FROM mv_account_access_count
+		GROUP BY address
 	),
+
 	single_access_stats AS (
-		SELECT 
-			countIf(is_contract = 0 AND access_count = 1) as single_access_eoas,
-			countIf(is_contract = 1 AND access_count = 1) as single_access_contracts
+		SELECT
+		countIf(is_contract = 0 AND access_count = 1)                AS single_access_eoas,
+		countIf(is_contract = 1 AND access_count = 1)                AS single_access_contracts
 		FROM access_counts
 	)
-	SELECT 
-		a_stats.total_eoas,
-		a_stats.total_contracts,
-		a_stats.expired_eoas,
-		a_stats.expired_contracts,
-		sa_stats.single_access_eoas,
-		sa_stats.single_access_contracts
-	FROM account_stats a_stats
-	CROSS JOIN single_access_stats sa_stats
+
+	SELECT
+	stats.total_eoas,
+	stats.total_contracts,
+	stats.expired_eoas,
+	stats.expired_contracts,
+	sas.single_access_eoas,
+	sas.single_access_contracts
+	FROM account_stats AS stats
+	CROSS JOIN single_access_stats AS sas
+	;
 	`
 
 	var totalEOAs, totalContracts, expiredEOAs, expiredContracts, singleAccessEOAs, singleAccessContracts int
@@ -384,17 +409,17 @@ func (r *ClickHouseRepository) GetStorageAnalytics(ctx context.Context, params Q
 	WITH storage_stats AS (
 		SELECT 
 			COUNT(*) as total_slots,
-			countIf(last_access_block <= ?) as expired_slots
+			countIf(last_access_block < ?) as expired_slots
 		FROM storage_state
+		FINAL
 	),
 	storage_access_counts AS (
 		SELECT 
-			s.address,
-			s.slot_key,
-			countMerge(sc.access_count) as access_count
-		FROM storage_state s
-		INNER JOIN storage_access_count_agg sc ON s.address = sc.address AND s.slot_key = sc.slot_key
-		GROUP BY s.address, s.slot_key
+			address,
+			slot_key,
+			countMerge(access_count) as access_count
+		FROM mv_storage_access_count
+		GROUP BY address, slot_key
 	),
 	single_access_stats AS (
 		SELECT 

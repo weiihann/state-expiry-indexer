@@ -441,8 +441,8 @@ The system has undergone a significant architectural simplification:
 - [x] **T1.5**: Test utilities for error scenario simulation ✅ **COMPLETED**
 
 #### Core Analytics Methods Test Suite (Task T2)
-- [ ] **T2.1**: Complete test suite for `GetAccountAnalytics` (Questions 1, 2, 5a)
-- [ ] **T2.2**: Complete test suite for `GetStorageAnalytics` (Questions 3, 4, 5b)
+- [x] **T2.1**: Complete test suite for `GetAccountAnalytics` (Questions 1, 2, 5a) ✅ **COMPLETED**
+- [x] **T2.2**: Complete test suite for `GetStorageAnalytics` (Questions 3, 4, 5b) ✅ **COMPLETED**
 - [ ] **T2.3**: Complete test suite for `GetContractAnalytics` (Questions 7-11, 15)
 - [ ] **T2.4**: Complete test suite for `GetBlockActivityAnalytics` (Questions 6, 12-14)
 - [ ] **T2.5**: Complete test suite for `GetUnifiedAnalytics` (All Questions 1-15)
@@ -530,7 +530,10 @@ The system has undergone a significant architectural simplification:
 - **Success Criteria**: Robust test suite supporting all 16 analytics methods with comprehensive coverage, performance validation, and error resilience
 - **Progress**: 
   - ✅ **T1 Complete**: Comprehensive test infrastructure with data generators, benchmarking, and error simulation
-  - 🔄 **T2 In Progress**: Starting core analytics methods test suite development
+  - 🔄 **T2 In Progress**: Core analytics methods test suite development
+    - ✅ **T2.1 Complete**: GetAccountAnalytics test suite (Questions 1, 2, 5a) - comprehensive coverage with edge cases, performance testing
+    - ✅ **T2.2 Complete**: GetStorageAnalytics test suite (Questions 3, 4, 5b) - comprehensive coverage with edge cases, performance testing
+    - 🔄 **T2.3 Next**: GetContractAnalytics test suite (Questions 7-11, 15)
 
 ### PostgreSQL Removal - Architectural Simplification (Completed)
 - **Status**: ✅ **COMPLETED**
@@ -608,10 +611,23 @@ The system has undergone a significant architectural simplification:
 - **Testing Results**: All test infrastructure components validated and working correctly
 - **Impact**: Robust foundation for comprehensive analytics testing now available
 
-### Ready for Core Analytics Testing Phase
-- **Current Status**: All implementation tasks (A1-A8) and test infrastructure (T1) are now complete with ClickHouse-only architecture
-- **Next Steps**: Ready to proceed with Task T2 (Core Analytics Methods Test Suite)
-- **System Status**: The analytics system is fully functional with optimized performance for ClickHouse backend and comprehensive test infrastructure
+### Test Determinism Cleanup - COMPLETED ✅
+- **Status**: ✅ **COMPLETED**
+- **Task**: Remove single access patterns, activity patterns, and randomization from test helpers
+- **Completed Actions**:
+  - ✅ Removed single access pattern generation logic from test helpers
+  - ✅ Removed activity pattern generation logic from test helpers  
+  - ✅ Removed randomization from test data generation
+  - ✅ Simplified test data generation to be fully deterministic
+  - ✅ Updated `AnalyticsTestDataConfig` structure to remove complex pattern fields
+  - ✅ Updated test data generation methods to use deterministic algorithms
+  - ✅ Verified `clickhouse_test.go` contains deterministic GetAccountAnalytics and GetStorageAnalytics tests
+- **Files Updated**:
+  - ✅ `internal/repository/test_helpers.go` - Removed complex pattern generation, simplified to deterministic approach
+  - ✅ Test configurations now use only basic parameters (NumEOAs, NumContracts, SlotsPerContract, StartBlock, EndBlock, ExpiryBlock)
+- **Result**: Test data generation is now fully deterministic with predictable account and storage access patterns
+- **Impact**: Tests now produce consistent, reproducible results for expiry and single access analytics
+- **System Status**: The analytics system is fully functional with optimized performance for ClickHouse backend and comprehensive deterministic test infrastructure
 - **Architecture**: Successfully simplified to single-database implementation with improved maintainability and robust testing capabilities
 
 ## Lessons
