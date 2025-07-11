@@ -305,14 +305,21 @@ func (r *ClickHouseRepository) GetAccountAnalytics(ctx context.Context, params Q
 	// Single optimized query using materialized views and aggregated tables
 	query := `
 	WITH
+	  collapsed_accounts AS (
+    	SELECT
+      		address,
+      		argMax(is_contract, last_access_block) AS is_contract,
+      		max(last_access_block)                 AS max_access_block
+    	FROM accounts_state
+    	GROUP BY address
+  	),
 	account_stats AS (
 		SELECT
 		countIf(is_contract = 0)                                     AS total_eoas,
 		countIf(is_contract = 1)                                     AS total_contracts,
-		countIf(is_contract = 0 AND last_access_block < ?)         AS expired_eoas,
-		countIf(is_contract = 1 AND last_access_block < ?)         AS expired_contracts
-		FROM accounts_state
-		FINAL
+		countIf(is_contract = 0 AND max_access_block < ?)         	 AS expired_eoas,
+		countIf(is_contract = 1 AND max_access_block < ?)         	 AS expired_contracts
+		FROM collapsed_accounts
 	),
 
 	access_counts AS (
@@ -406,12 +413,20 @@ func (r *ClickHouseRepository) GetStorageAnalytics(ctx context.Context, params Q
 
 	// Single optimized query using materialized views and aggregated tables
 	query := `
-	WITH storage_stats AS (
+	WITH 
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
+	storage_stats AS (
 		SELECT 
 			COUNT(*) as total_slots,
-			countIf(last_access_block < ?) as expired_slots
-		FROM storage_state
-		FINAL
+			countIf(max_access_block < ?) as expired_slots
+		FROM collapsed_storage
 	),
 	storage_access_counts AS (
 		SELECT 
