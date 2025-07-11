@@ -21,7 +21,7 @@ var rootCmd = &cobra.Command{
 	Short: "A CLI for the State Expiry Indexer",
 	Long:  `state-expiry-indexer is a tool to index Ethereum state and identify expired accounts.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		config, err := internal.LoadConfig("config.yaml")
+		config, err := internal.LoadConfig("./configs")
 		if err != nil {
 			logger.Error("Failed to load config", "error", err)
 			os.Exit(1)
