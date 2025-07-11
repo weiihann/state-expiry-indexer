@@ -138,15 +138,15 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64, sa State
 			return fmt.Errorf("could not update range data for range %d: %w", rangeNumber, err)
 		}
 
-		i.log.Info("Committed range data", "range_number", rangeNumber, "account_events", sa.Count())
+		i.log.Info("Committed range data", "range_number", rangeNumber, "count", sa.Count())
 		sa.Reset()
 	}
 
 	i.log.Info("Successfully processed range",
-		"range_number", rangeNumber,
-		"blocks_processed", len(rangeDiffs),
+		"range", rangeNumber,
 		"range_start", start,
-		"range_end", end)
+		"range_end", end,
+		"blocks", len(rangeDiffs))
 
 	return nil
 }
