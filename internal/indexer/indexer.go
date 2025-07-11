@@ -76,6 +76,10 @@ func (s *Service) Close() {
 	}
 }
 
+func (s *Service) ProcessRangeDebug(ctx context.Context, rangeNumber uint64) error {
+	return s.indexer.ProcessRangeDebug(ctx, rangeNumber)
+}
+
 func (i *Indexer) ProcessGenesis(ctx context.Context) error {
 	genesis := core.DefaultGenesisBlock()
 
@@ -151,6 +155,30 @@ func (i *Indexer) ProcessRange(ctx context.Context, rangeNumber uint64, sa State
 	return nil
 }
 
+func (i *Indexer) ProcessRangeDebug(ctx context.Context, rangeNumber uint64) error {
+	sa := newStateAccessArchive()
+
+	start, end := i.rangeProcessor.GetRangeBlockNumbers(rangeNumber)
+	i.log.Info("Processing range",
+		"range_number", rangeNumber,
+		"range_start", start,
+		"range_end", end,
+		"range_size", end-start+1)
+
+	rangeDiffs, err := i.rangeProcessor.ReadRange(rangeNumber)
+	if err != nil {
+		return fmt.Errorf("could not read range %d: %w", rangeNumber, err)
+	}
+
+	for _, rangeDiff := range rangeDiffs {
+		if err := i.processBlockDiff(ctx, rangeDiff, sa); err != nil {
+			return fmt.Errorf("could not process block %d in range %d: %w", rangeDiff.BlockNum, rangeNumber, err)
+		}
+	}
+
+	return nil
+}
+
 // processBlockDiff processes a single block's state diff data and returns the processed data
 func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeDiffs, sa StateAccess) error {
 	blockNumber := rangeDiff.BlockNum
@@ -203,7 +231,7 @@ func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNu
 
 	// If the account has storage changes, it's definitely a contract
 	if diff.Storage != nil {
-		if _, ok := diff.Storage.(map[string]any); ok {
+		if st, ok := diff.Storage.(map[string]any); ok && len(st) > 0 {
 			i.accountType.Add(addr, true)
 			return true
 		}
