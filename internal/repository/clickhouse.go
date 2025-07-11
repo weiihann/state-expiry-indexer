@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/weiihann/state-expiry-indexer/internal/logger"
 )
@@ -102,371 +103,6 @@ func (r *ClickHouseRepository) GetSyncStatus(ctx context.Context, latestRange ui
 	}, nil
 }
 
-// deriveAccountExpiryAnalysis derives account expiry analysis from base statistics
-func (r *ClickHouseRepository) deriveAccountExpiryAnalysis(stats *BaseStatistics) AccountExpiryAnalysis {
-	result := AccountExpiryAnalysis{
-		ExpiredEOAs:          stats.ExpiredEOAs,
-		ExpiredContracts:     stats.ExpiredContracts,
-		TotalExpiredAccounts: stats.ExpiredAccounts(),
-		TotalEOAs:            stats.TotalEOAs,
-		TotalContracts:       stats.TotalContracts,
-		TotalAccounts:        stats.TotalAccounts(),
-	}
-
-	// Calculate percentages
-	if stats.TotalEOAs > 0 {
-		result.ExpiredEOAPercentage = float64(stats.ExpiredEOAs) / float64(stats.TotalEOAs) * 100
-	}
-	if stats.TotalContracts > 0 {
-		result.ExpiredContractPercentage = float64(stats.ExpiredContracts) / float64(stats.TotalContracts) * 100
-	}
-	if stats.TotalAccounts() > 0 {
-		result.TotalExpiredPercentage = float64(stats.ExpiredAccounts()) / float64(stats.TotalAccounts()) * 100
-	}
-
-	return result
-}
-
-// deriveAccountDistributionAnalysis derives account distribution analysis from base statistics
-func (r *ClickHouseRepository) deriveAccountDistributionAnalysis(stats *BaseStatistics) AccountDistributionAnalysis {
-	result := AccountDistributionAnalysis{
-		TotalExpiredAccounts: stats.ExpiredAccounts(),
-	}
-
-	// Calculate percentages among expired accounts
-	if stats.ExpiredAccounts() > 0 {
-		result.ContractPercentage = float64(stats.ExpiredContracts) / float64(stats.ExpiredAccounts()) * 100
-		result.EOAPercentage = float64(stats.ExpiredEOAs) / float64(stats.ExpiredAccounts()) * 100
-	}
-
-	return result
-}
-
-// deriveStorageSlotExpiryAnalysis derives storage slot expiry analysis from base statistics
-func (r *ClickHouseRepository) deriveStorageSlotExpiryAnalysis(stats *BaseStatistics) StorageSlotExpiryAnalysis {
-	result := StorageSlotExpiryAnalysis{
-		ExpiredSlots: stats.ExpiredSlots,
-		TotalSlots:   stats.TotalSlots,
-	}
-
-	// Calculate percentage of expired slots
-	if stats.TotalSlots > 0 {
-		result.ExpiredSlotPercentage = float64(stats.ExpiredSlots) / float64(stats.TotalSlots) * 100
-	}
-
-	return result
-}
-
-// getContractStorageAnalysis gets the top 10 contracts with the largest expired state footprint
-func (r *ClickHouseRepository) getContractStorageAnalysis(ctx context.Context, expiryBlock uint64, result *ContractStorageAnalysis) error {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse query using optimized storage_state table
-	query := `
-		WITH contract_storage_stats AS (
-			SELECT 
-				s.address,
-				countIf(s.last_access_block < ?) as expired_slots,
-				COUNT(*) as total_slots
-			FROM storage_state s
-			GROUP BY s.address
-			HAVING countIf(s.last_access_block < ?) > 0
-		)
-		SELECT 
-			lower(hex(address)),
-			expired_slots,
-			total_slots,
-			(expired_slots / total_slots * 100) as expiry_percentage
-		FROM contract_storage_stats
-		ORDER BY expired_slots DESC, expiry_percentage DESC
-		LIMIT 10
-	`
-
-	rows, err := r.db.QueryContext(ctx, query, expiryBlock, expiryBlock)
-	if err != nil {
-		log.Error("Could not query contract storage analysis", "expiry_block", expiryBlock, "error", err)
-		return fmt.Errorf("could not query contract storage analysis: %w", err)
-	}
-	defer rows.Close()
-
-	var contracts []ExpiredContract
-	for rows.Next() {
-		var contract ExpiredContract
-		var addressHex string
-
-		err := rows.Scan(
-			&addressHex,
-			&contract.ExpiredSlotCount,
-			&contract.TotalSlotCount,
-			&contract.ExpiryPercentage,
-		)
-		if err != nil {
-			log.Error("Could not scan expired contract row", "error", err)
-			return fmt.Errorf("could not scan expired contract row: %w", err)
-		}
-
-		// Add 0x prefix to address
-		contract.Address = "0x" + addressHex
-		contracts = append(contracts, contract)
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Error("Error iterating expired contract rows", "error", err)
-		return fmt.Errorf("error iterating expired contract rows: %w", err)
-	}
-
-	result.TopExpiredContracts = contracts
-	log.Debug("Retrieved contract storage analysis", "count", len(contracts), "expiry_block", expiryBlock)
-	return nil
-}
-
-// getStorageExpiryAnalysis gets storage expiry analysis and fully expired contracts (combined for efficiency)
-func (r *ClickHouseRepository) getStorageExpiryAnalysis(ctx context.Context, expiryBlock uint64, storageResult *StorageExpiryAnalysis, fullyExpiredResult *FullyExpiredContractsAnalysis) error {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse query for storage expiry percentages per contract using optimized storage_state table
-	query := `
-		WITH contract_expiry_stats AS (
-			SELECT 
-				address,
-				countIf(last_access_block < ?) as expired_slots,
-				COUNT(*) as total_slots,
-				(countIf(last_access_block < ?) / COUNT(*) * 100) as expiry_percentage
-			FROM storage_state
-			GROUP BY address
-			HAVING COUNT(*) > 0
-		)
-		SELECT 
-			AVG(expiry_percentage) as avg_expiry,
-			quantile(0.5)(expiry_percentage) as median_expiry,
-			COUNT(*) as contracts_analyzed,
-			countIf(expiry_percentage = 100) as fully_expired_count
-		FROM contract_expiry_stats
-	`
-
-	var avgExpiry, medianExpiry float64
-	var contractsAnalyzed, fullyExpiredCount int
-
-	err := r.db.QueryRowContext(ctx, query, expiryBlock, expiryBlock).Scan(
-		&avgExpiry,
-		&medianExpiry,
-		&contractsAnalyzed,
-		&fullyExpiredCount,
-	)
-	if err != nil {
-		log.Error("Could not get storage expiry analysis", "expiry_block", expiryBlock, "error", err)
-		return fmt.Errorf("could not get storage expiry analysis: %w", err)
-	}
-
-	// Set storage expiry analysis results
-	storageResult.AverageExpiryPercentage = avgExpiry
-	storageResult.MedianExpiryPercentage = medianExpiry
-	storageResult.ContractsAnalyzed = contractsAnalyzed
-
-	// Get expiry distribution buckets
-	expiryDistribution, err := r.getExpiryDistributionBuckets(ctx, expiryBlock)
-	if err != nil {
-		log.Error("Could not get expiry distribution buckets", "error", err)
-		return fmt.Errorf("could not get expiry distribution buckets: %w", err)
-	}
-	storageResult.ExpiryDistribution = expiryDistribution
-
-	// Set fully expired contracts analysis results
-	fullyExpiredResult.FullyExpiredContractCount = fullyExpiredCount
-	fullyExpiredResult.TotalContractsWithStorage = contractsAnalyzed
-	if contractsAnalyzed > 0 {
-		fullyExpiredResult.FullyExpiredPercentage = float64(fullyExpiredCount) / float64(contractsAnalyzed) * 100
-	}
-
-	log.Debug("Retrieved storage expiry analysis",
-		"avg_expiry", avgExpiry,
-		"median_expiry", medianExpiry,
-		"contracts_analyzed", contractsAnalyzed,
-		"fully_expired", fullyExpiredCount)
-
-	return nil
-}
-
-// getExpiryDistributionBuckets gets the distribution of contracts by expiry percentage ranges
-func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context, expiryBlock uint64) ([]ExpiryPercentageBucket, error) {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse query for expiry distribution buckets using optimized storage_state table
-	query := `
-		WITH contract_expiry_stats AS (
-			SELECT 
-				address,
-				(countIf(last_access_block < ?) / COUNT(*) * 100) as expiry_percentage
-			FROM storage_state
-			GROUP BY address
-			HAVING COUNT(*) > 0
-		),
-		bucketed_stats AS (
-			SELECT 
-				CASE 
-					WHEN expiry_percentage = 0 THEN 0
-					WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN 1
-					WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN 21
-					WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN 51
-					WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN 81
-					WHEN expiry_percentage = 100 THEN 100
-					ELSE -1
-				END as bucket_start,
-				CASE 
-					WHEN expiry_percentage = 0 THEN 0
-					WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN 20
-					WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN 50
-					WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN 80
-					WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN 99
-					WHEN expiry_percentage = 100 THEN 100
-					ELSE -1
-				END as bucket_end
-			FROM contract_expiry_stats
-		)
-		SELECT 
-			bucket_start,
-			bucket_end,
-			COUNT(*) as count
-		FROM bucketed_stats
-		WHERE bucket_start >= 0
-		GROUP BY bucket_start, bucket_end
-		ORDER BY bucket_start
-	`
-
-	rows, err := r.db.QueryContext(ctx, query, expiryBlock)
-	if err != nil {
-		log.Error("Could not query expiry distribution buckets", "expiry_block", expiryBlock, "error", err)
-		return nil, fmt.Errorf("could not query expiry distribution buckets: %w", err)
-	}
-	defer rows.Close()
-
-	var buckets []ExpiryPercentageBucket
-	for rows.Next() {
-		var bucket ExpiryPercentageBucket
-		err := rows.Scan(&bucket.RangeStart, &bucket.RangeEnd, &bucket.Count)
-		if err != nil {
-			log.Error("Could not scan bucket row", "error", err)
-			return nil, fmt.Errorf("could not scan bucket row: %w", err)
-		}
-		buckets = append(buckets, bucket)
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Error("Error iterating bucket rows", "error", err)
-		return nil, fmt.Errorf("error iterating bucket rows: %w", err)
-	}
-
-	log.Debug("Retrieved expiry distribution buckets", "count", len(buckets), "expiry_block", expiryBlock)
-	return buckets, nil
-}
-
-// getCompleteExpiryAnalysis gets contracts that are fully expired at both account and storage levels
-func (r *ClickHouseRepository) getCompleteExpiryAnalysis(ctx context.Context, expiryBlock uint64, result *CompleteExpiryAnalysis) error {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse query for complete expiry analysis using optimized state tables
-	query := `
-		WITH contract_addresses AS (
-			SELECT DISTINCT address
-			FROM storage_state
-		),
-		contract_account_expiry AS (
-			SELECT 
-				ca.address,
-				aa.last_access_block < ? as account_expired
-			FROM contract_addresses ca
-			LEFT JOIN accounts_state aa ON ca.address = aa.address
-		),
-		contract_storage_expiry AS (
-			SELECT 
-				address,
-				countIf(last_access_block < ?) = COUNT(*) as all_storage_expired
-			FROM storage_state
-			GROUP BY address
-		)
-		SELECT 
-			COUNT(*) as total_contracts_with_storage,
-			countIf(cae.account_expired AND cse.all_storage_expired) as fully_expired_count
-		FROM contract_account_expiry cae
-		JOIN contract_storage_expiry cse ON cae.address = cse.address
-	`
-
-	var totalContracts, fullyExpiredCount int
-	err := r.db.QueryRowContext(ctx, query, expiryBlock, expiryBlock).Scan(&totalContracts, &fullyExpiredCount)
-	if err != nil {
-		log.Error("Could not get complete expiry analysis", "expiry_block", expiryBlock, "error", err)
-		return fmt.Errorf("could not get complete expiry analysis: %w", err)
-	}
-
-	result.FullyExpiredContractCount = fullyExpiredCount
-	result.TotalContractsWithStorage = totalContracts
-	if totalContracts > 0 {
-		result.FullyExpiredPercentage = float64(fullyExpiredCount) / float64(totalContracts) * 100
-	}
-
-	log.Debug("Retrieved complete expiry analysis",
-		"total_contracts", totalContracts,
-		"fully_expired", fullyExpiredCount,
-		"percentage", result.FullyExpiredPercentage)
-
-	return nil
-}
-
-// getBaseStatistics retrieves all basic statistics in a single optimized ClickHouse query
-func (r *ClickHouseRepository) getBaseStatistics(ctx context.Context, expiryBlock uint64) (*BaseStatistics, error) {
-	log := logger.GetLogger("clickhouse-repo")
-
-	// ClickHouse query using optimized accounts_state and storage_state tables
-	query := `
-		WITH account_stats AS (
-			SELECT 
-				countIf(is_contract = 0) as total_eoas,
-				countIf(is_contract = 1) as total_contracts,
-				countIf(last_access_block < ? AND is_contract = 0) as expired_eoas,
-				countIf(last_access_block < ? AND is_contract = 1) as expired_contracts
-			FROM accounts_state
-		),
-		storage_stats AS (
-			SELECT 
-				COUNT(*) as total_slots,
-				countIf(last_access_block < ?) as expired_slots
-			FROM storage_state
-		)
-		SELECT 
-			a.total_eoas,
-			a.total_contracts,
-			a.expired_eoas,
-			a.expired_contracts,
-			s.total_slots,
-			s.expired_slots
-		FROM account_stats a, storage_stats s
-	`
-
-	var stats BaseStatistics
-	err := r.db.QueryRowContext(ctx, query, expiryBlock, expiryBlock, expiryBlock).Scan(
-		&stats.TotalEOAs,
-		&stats.TotalContracts,
-		&stats.ExpiredEOAs,
-		&stats.ExpiredContracts,
-		&stats.TotalSlots,
-		&stats.ExpiredSlots,
-	)
-	if err != nil {
-		log.Error("Could not get base statistics", "expiry_block", expiryBlock, "error", err)
-		return nil, fmt.Errorf("could not get base statistics: %w", err)
-	}
-
-	log.Debug("Retrieved base statistics",
-		"total_eoas", stats.TotalEOAs,
-		"total_contracts", stats.TotalContracts,
-		"expired_eoas", stats.ExpiredEOAs,
-		"expired_contracts", stats.ExpiredContracts,
-		"total_slots", stats.TotalSlots,
-		"expired_slots", stats.ExpiredSlots)
-
-	return &stats, nil
-}
-
 // InsertRange processes all events for archive mode (stores ALL events, not just latest)
 func (r *ClickHouseRepository) InsertRange(
 	ctx context.Context,
@@ -514,10 +150,7 @@ func (r *ClickHouseRepository) InsertRange(
 		return fmt.Errorf("could not commit transaction: %w", err)
 	}
 
-	log.Info("Successfully completed ClickHouse archive mode update with all events",
-		"range_number", rangeNumber,
-		"account_events_inserted", len(accountAccesses),
-		"storage_events_inserted", len(storageAccesses))
+	log.Info("Successfully inserted range", "range", rangeNumber)
 
 	return nil
 }
@@ -643,346 +276,1164 @@ func (r *ClickHouseRepository) insertAllStorageAccessEventsInTx(ctx context.Cont
 	return nil
 }
 
-// Extended analytics methods for ClickHouse - Full implementation
+// ==============================================================================
+// OPTIMIZED ANALYTICS METHODS (Questions 1-15)
+// ==============================================================================
 
-// GetExtendedAnalyticsData returns comprehensive extended analytics data
-func (r *ClickHouseRepository) GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error) {
+// GetAccountAnalytics - Questions 1, 2, 5a
+func (r *ClickHouseRepository) GetAccountAnalytics(ctx context.Context, params QueryParams) (*AccountAnalytics, error) {
 	log := logger.GetLogger("clickhouse-repo")
-	log.Info("Starting ClickHouse extended analytics data retrieval", "expiry_block", expiryBlock, "current_block", currentBlock)
+	startTime := time.Now()
 
-	// Get base statistics with a single optimized query (merged from old GetAnalyticsData)
-	baseStats, err := r.getBaseStatistics(ctx, expiryBlock)
-	if err != nil {
-		log.Error("Failed to get base statistics", "error", err)
-		return nil, fmt.Errorf("failed to get base statistics: %w", err)
-	}
-
-	res := &ExtendedAnalyticsData{}
-
-	// Build basic analytics (merged from old GetAnalyticsData)
-	res.AccountExpiry = r.deriveAccountExpiryAnalysis(baseStats)
-	res.AccountDistribution = r.deriveAccountDistributionAnalysis(baseStats)
-	res.StorageSlotExpiry = r.deriveStorageSlotExpiryAnalysis(baseStats)
-
-	// Get contract storage analysis (merged from old GetAnalyticsData)
-	if err := r.getContractStorageAnalysis(ctx, expiryBlock, &res.ContractStorage); err != nil {
-		log.Error("Failed to get contract storage analysis", "error", err)
-		return nil, fmt.Errorf("failed to get contract storage analysis: %w", err)
-	}
-
-	// Get storage expiry analysis and fully expired contracts (merged from old GetAnalyticsData)
-	if err := r.getStorageExpiryAnalysis(ctx, expiryBlock, &res.StorageExpiry, &res.FullyExpiredContracts); err != nil {
-		log.Error("Failed to get storage expiry analysis", "error", err)
-		return nil, fmt.Errorf("failed to get storage expiry analysis: %w", err)
-	}
-
-	// Set default empty values for active contracts with expired storage analysis (merged from old GetAnalyticsData)
-	res.ActiveContractsExpiredStorage = ActiveContractsExpiredStorageAnalysis{
-		ThresholdAnalysis:    []ExpiredStorageThreshold{},
-		TotalActiveContracts: 0,
-	}
-
-	// Get complete expiry analysis (merged from old GetAnalyticsData)
-	if err := r.getCompleteExpiryAnalysis(ctx, expiryBlock, &res.CompleteExpiry); err != nil {
-		log.Error("Failed to get complete expiry analysis", "error", err)
-		return nil, fmt.Errorf("failed to get complete expiry analysis: %w", err)
-	}
-
-	// Get advanced analytics components
-	singleAccess, err := r.GetSingleAccessAnalytics(ctx, expiryBlock, currentBlock)
-	if err != nil {
-		log.Error("Failed to get single access analytics", "error", err)
-		return nil, fmt.Errorf("failed to get single access analytics: %w", err)
-	}
-
-	blockActivity, err := r.GetBlockActivityAnalytics(ctx, 0, currentBlock, 10)
-	if err != nil {
-		log.Error("Failed to get block activity analytics", "error", err)
-		return nil, fmt.Errorf("failed to get block activity analytics: %w", err)
-	}
-
-	timeSeries, err := r.GetTimeSeriesAnalytics(ctx, 0, currentBlock, 1000)
-	if err != nil {
-		log.Error("Failed to get time series analytics", "error", err)
-		return nil, fmt.Errorf("failed to get time series analytics: %w", err)
-	}
-
-	storageVolume, err := r.GetStorageVolumeAnalytics(ctx, expiryBlock, currentBlock, 10)
-	if err != nil {
-		log.Error("Failed to get storage volume analytics", "error", err)
-		return nil, fmt.Errorf("failed to get storage volume analytics: %w", err)
-	}
-
-	log.Info("Successfully completed ClickHouse extended analytics data retrieval",
-		"expired_accounts", res.AccountExpiry.TotalExpiredAccounts,
-		"total_accounts", res.AccountExpiry.TotalAccounts,
-		"expired_slots", res.StorageSlotExpiry.ExpiredSlots,
-		"total_slots", res.StorageSlotExpiry.TotalSlots)
-
-	res.SingleAccess = *singleAccess
-	res.BlockActivity = *blockActivity
-	res.TimeSeries = *timeSeries
-	res.StorageVolume = *storageVolume
-
-	return res, nil
-}
-
-// GetSingleAccessAnalytics returns analytics for accounts/storage slots accessed only once
-func (r *ClickHouseRepository) GetSingleAccessAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*SingleAccessAnalysis, error) {
-	log := logger.GetLogger("clickhouse-repo")
-	log.Info("Starting ClickHouse single access analytics", "expiry_block", expiryBlock, "current_block", currentBlock)
-
-	// Query for accounts accessed only once
-	accountsQuery := `
-		WITH access_counts AS (
-			SELECT 
-				address,
-				COUNT(*) as access_count,
-				any(is_contract) as is_contract
-			FROM accounts_archive
-			GROUP BY address
-		)
+	// Single optimized query using materialized views and aggregated tables
+	query := `
+	WITH account_stats AS (
 		SELECT 
-			countIf(access_count = 1 AND is_contract = 0) as single_access_eoas,
-			countIf(access_count = 1 AND is_contract = 1) as single_access_contracts,
-			countIf(access_count = 1) as total_single_access,
 			countIf(is_contract = 0) as total_eoas,
 			countIf(is_contract = 1) as total_contracts,
-			COUNT(*) as total_accounts
+			countIf(is_contract = 0 AND last_access_block <= ?) as expired_eoas,
+			countIf(is_contract = 1 AND last_access_block <= ?) as expired_contracts
+		FROM accounts_state
+	),
+	access_counts AS (
+		SELECT 
+			a.address,
+			a.is_contract,
+			countMerge(ac.access_count) as access_count
+		FROM accounts_state a
+		INNER JOIN account_access_count_agg ac ON a.address = ac.address
+		GROUP BY a.address, a.is_contract
+	),
+	single_access_stats AS (
+		SELECT 
+			countIf(is_contract = 0 AND access_count = 1) as single_access_eoas,
+			countIf(is_contract = 1 AND access_count = 1) as single_access_contracts
 		FROM access_counts
+	)
+	SELECT 
+		a_stats.total_eoas,
+		a_stats.total_contracts,
+		a_stats.expired_eoas,
+		a_stats.expired_contracts,
+		sa_stats.single_access_eoas,
+		sa_stats.single_access_contracts
+	FROM account_stats a_stats
+	CROSS JOIN single_access_stats sa_stats
 	`
 
-	var accountsAnalysis SingleAccessAccountsAnalysis
-	err := r.db.QueryRowContext(ctx, accountsQuery).Scan(
-		&accountsAnalysis.SingleAccessEOAs,
-		&accountsAnalysis.SingleAccessContracts,
-		&accountsAnalysis.TotalSingleAccess,
-		&accountsAnalysis.TotalEOAs,
-		&accountsAnalysis.TotalContracts,
-		&accountsAnalysis.TotalAccounts,
+	var totalEOAs, totalContracts, expiredEOAs, expiredContracts, singleAccessEOAs, singleAccessContracts int
+
+	err := r.db.QueryRowContext(ctx, query, params.ExpiryBlock, params.ExpiryBlock).Scan(
+		&totalEOAs, &totalContracts, &expiredEOAs, &expiredContracts,
+		&singleAccessEOAs, &singleAccessContracts,
 	)
 	if err != nil {
-		log.Error("Could not get single access accounts analysis", "error", err)
-		return nil, fmt.Errorf("could not get single access accounts analysis: %w", err)
+		log.Error("Could not get account analytics", "error", err)
+		return nil, fmt.Errorf("could not get account analytics: %w", err)
 	}
 
-	// Calculate percentages
-	if accountsAnalysis.TotalEOAs > 0 {
-		accountsAnalysis.SingleAccessEOARate = float64(accountsAnalysis.SingleAccessEOAs) / float64(accountsAnalysis.TotalEOAs) * 100
-	}
-	if accountsAnalysis.TotalContracts > 0 {
-		accountsAnalysis.SingleAccessContractRate = float64(accountsAnalysis.SingleAccessContracts) / float64(accountsAnalysis.TotalContracts) * 100
-	}
-	if accountsAnalysis.TotalAccounts > 0 {
-		accountsAnalysis.SingleAccessRate = float64(accountsAnalysis.TotalSingleAccess) / float64(accountsAnalysis.TotalAccounts) * 100
+	// Calculate derived values
+	totalAccounts := totalEOAs + totalContracts
+	totalExpired := expiredEOAs + expiredContracts
+	totalSingleAccess := singleAccessEOAs + singleAccessContracts
+
+	var expiryRate, singleAccessRate, eoaPercentage, contractPercentage float64
+	if totalAccounts > 0 {
+		expiryRate = float64(totalExpired) / float64(totalAccounts) * 100
+		singleAccessRate = float64(totalSingleAccess) / float64(totalAccounts) * 100
+		eoaPercentage = float64(totalEOAs) / float64(totalAccounts) * 100
+		contractPercentage = float64(totalContracts) / float64(totalAccounts) * 100
 	}
 
-	// Query for storage slots accessed only once
-	storageQuery := `
-		WITH storage_access_counts AS (
-			SELECT 
-				address,
-				slot_key,
-				COUNT(*) as access_count
-			FROM storage_archive
-			GROUP BY address, slot_key
-		)
+	result := &AccountAnalytics{
+		Total: AccountTotals{
+			EOAs:      totalEOAs,
+			Contracts: totalContracts,
+			Total:     totalAccounts,
+		},
+		Expiry: AccountExpiryData{
+			ExpiredEOAs:      expiredEOAs,
+			ExpiredContracts: expiredContracts,
+			TotalExpired:     totalExpired,
+			ExpiryRate:       expiryRate,
+		},
+		SingleAccess: AccountSingleAccessData{
+			SingleAccessEOAs:      singleAccessEOAs,
+			SingleAccessContracts: singleAccessContracts,
+			TotalSingleAccess:     totalSingleAccess,
+			SingleAccessRate:      singleAccessRate,
+		},
+		Distribution: AccountDistribution{
+			EOAPercentage:      eoaPercentage,
+			ContractPercentage: contractPercentage,
+		},
+	}
+
+	log.Debug("Retrieved account analytics",
+		"total_accounts", totalAccounts,
+		"expired_accounts", totalExpired,
+		"duration_ms", time.Since(startTime).Milliseconds())
+
+	return result, nil
+}
+
+// GetStorageAnalytics - Questions 3, 4, 5b
+func (r *ClickHouseRepository) GetStorageAnalytics(ctx context.Context, params QueryParams) (*StorageAnalytics, error) {
+	log := logger.GetLogger("clickhouse-repo")
+	startTime := time.Now()
+
+	// Single optimized query using materialized views and aggregated tables
+	query := `
+	WITH storage_stats AS (
 		SELECT 
-			countIf(access_count = 1) as single_access_slots,
-			COUNT(*) as total_slots
+			COUNT(*) as total_slots,
+			countIf(last_access_block <= ?) as expired_slots
+		FROM storage_state
+	),
+	storage_access_counts AS (
+		SELECT 
+			s.address,
+			s.slot_key,
+			countMerge(sc.access_count) as access_count
+		FROM storage_state s
+		INNER JOIN storage_access_count_agg sc ON s.address = sc.address AND s.slot_key = sc.slot_key
+		GROUP BY s.address, s.slot_key
+	),
+	single_access_stats AS (
+		SELECT 
+			countIf(access_count = 1) as single_access_slots
 		FROM storage_access_counts
+	)
+	SELECT 
+		s_stats.total_slots,
+		s_stats.expired_slots,
+		sa_stats.single_access_slots
+	FROM storage_stats s_stats
+	CROSS JOIN single_access_stats sa_stats
 	`
 
-	var storageAnalysis SingleAccessStorageAnalysis
-	err = r.db.QueryRowContext(ctx, storageQuery).Scan(
-		&storageAnalysis.SingleAccessSlots,
-		&storageAnalysis.TotalSlots,
+	var totalSlots, expiredSlots, singleAccessSlots int
+
+	err := r.db.QueryRowContext(ctx, query, params.ExpiryBlock).Scan(
+		&totalSlots, &expiredSlots, &singleAccessSlots,
 	)
 	if err != nil {
-		log.Error("Could not get single access storage analysis", "error", err)
-		return nil, fmt.Errorf("could not get single access storage analysis: %w", err)
+		log.Error("Could not get storage analytics", "error", err)
+		return nil, fmt.Errorf("could not get storage analytics: %w", err)
 	}
 
-	// Calculate storage single access rate
-	if storageAnalysis.TotalSlots > 0 {
-		storageAnalysis.SingleAccessRate = float64(storageAnalysis.SingleAccessSlots) / float64(storageAnalysis.TotalSlots) * 100
+	// Calculate derived values
+	activeSlots := totalSlots - expiredSlots
+	var expiryRate, singleAccessRate float64
+	if totalSlots > 0 {
+		expiryRate = float64(expiredSlots) / float64(totalSlots) * 100
+		singleAccessRate = float64(singleAccessSlots) / float64(totalSlots) * 100
 	}
 
-	log.Info("Successfully completed ClickHouse single access analytics")
-	return &SingleAccessAnalysis{
-		AccountsSingleAccess: accountsAnalysis,
-		StorageSingleAccess:  storageAnalysis,
-	}, nil
+	result := &StorageAnalytics{
+		Total: StorageTotals{
+			TotalSlots: totalSlots,
+		},
+		Expiry: StorageExpiryData{
+			ExpiredSlots: expiredSlots,
+			ActiveSlots:  activeSlots,
+			ExpiryRate:   expiryRate,
+		},
+		SingleAccess: StorageSingleAccessData{
+			SingleAccessSlots: singleAccessSlots,
+			SingleAccessRate:  singleAccessRate,
+		},
+	}
+
+	log.Debug("Retrieved storage analytics",
+		"total_slots", totalSlots,
+		"expired_slots", expiredSlots,
+		"duration_ms", time.Since(startTime).Milliseconds())
+
+	return result, nil
 }
 
-// GetBlockActivityAnalytics returns analytics for block-level activity patterns
-func (r *ClickHouseRepository) GetBlockActivityAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, topN int) (*BlockActivityAnalysis, error) {
+// GetContractAnalytics - Questions 7, 8, 9, 10, 11, 15
+func (r *ClickHouseRepository) GetContractAnalytics(ctx context.Context, params QueryParams) (*ContractAnalytics, error) {
 	log := logger.GetLogger("clickhouse-repo")
-	log.Info("Starting ClickHouse block activity analytics", "start_block", startBlock, "end_block", endBlock, "top_n", topN)
+	startTime := time.Now()
 
-	// For now, return a simplified implementation that acknowledges the request
-	// Full implementation would require complex queries on the archive tables
-	return &BlockActivityAnalysis{
-		TopActivityBlocks: []BlockActivityInfo{},
-		BlockAccessRates: BlockAccessRates{
-			BlocksAnalyzed: 0,
-		},
-		ActivityStatistics: ActivityStatistics{
-			MostActiveBlock:  0,
-			LeastActiveBlock: 0,
-		},
-		BlockRangeAnalysis: []BlockRangeInfo{},
-	}, nil
+	// Get contract rankings
+	rankings, err := r.getContractRankings(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get contract rankings: %w", err)
+	}
+
+	// Get contract expiry analysis
+	expiryAnalysis, err := r.getContractExpiryAnalysis(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get contract expiry analysis: %w", err)
+	}
+
+	// Get contract volume analysis
+	volumeAnalysis, err := r.getContractVolumeAnalysis(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get contract volume analysis: %w", err)
+	}
+
+	// Get contract status analysis
+	statusAnalysis, err := r.getContractStatusAnalysis(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get contract status analysis: %w", err)
+	}
+
+	result := &ContractAnalytics{
+		Rankings:       rankings,
+		ExpiryAnalysis: expiryAnalysis,
+		VolumeAnalysis: volumeAnalysis,
+		StatusAnalysis: statusAnalysis,
+	}
+
+	log.Debug("Retrieved contract analytics",
+		"rankings_count", len(rankings.TopByExpiredSlots),
+		"duration_ms", time.Since(startTime).Milliseconds())
+
+	return result, nil
 }
 
-// GetTimeSeriesAnalytics returns analytics for time-based access trends
-func (r *ClickHouseRepository) GetTimeSeriesAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, windowSize int) (*TimeSeriesAnalysis, error) {
-	log := logger.GetLogger("clickhouse-repo")
-	log.Info("Starting ClickHouse time series analytics", "start_block", startBlock, "end_block", endBlock, "window_size", windowSize)
-
-	// For now, return a simplified implementation
-	// Full implementation would require complex time series queries
-	return &TimeSeriesAnalysis{
-		AccessTrends: AccessTrendsAnalysis{
-			EOATrend:      []TimePoint{},
-			ContractTrend: []TimePoint{},
-			StorageTrend:  []TimePoint{},
-			TotalTrend:    []TimePoint{},
-			TrendDirection: TrendDirection{
-				EOATrend:      "stable",
-				ContractTrend: "stable",
-				StorageTrend:  "stable",
-				TotalTrend:    "stable",
-			},
-		},
-		FrequencyAnalysis: FrequencyAnalysisData{
-			AccountFrequency: AccountFrequencyAnalysis{
-				FrequencyDistribution: []FrequencyDistributionBucket{},
-				MostFrequentAccounts:  []FrequentAccountInfo{},
-			},
-			StorageFrequency: StorageFrequencyAnalysis{
-				FrequencyDistribution: []FrequencyDistributionBucket{},
-				MostFrequentSlots:     []FrequentStorageInfo{},
-			},
-		},
-		TrendStatistics: TrendStatisticsAnalysis{},
-		TimeWindows:     []TimeWindowAnalysis{},
-	}, nil
-}
-
-// GetStorageVolumeAnalytics returns analytics for storage volume and contract rankings
-func (r *ClickHouseRepository) GetStorageVolumeAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64, topN int) (*StorageVolumeAnalysis, error) {
-	log := logger.GetLogger("clickhouse-repo")
-	log.Info("Starting ClickHouse storage volume analytics", "expiry_block", expiryBlock, "current_block", currentBlock, "top_n", topN)
-
-	// Get basic storage distribution
-	distributionQuery := `
-		WITH storage_counts AS (
-			SELECT 
-				address,
-				COUNT(*) as total_slots,
-				countIf(last_access_block >= ?) as active_slots,
-				countIf(last_access_block < ?) as expired_slots
-			FROM storage_state
-			GROUP BY address
-		)
-		SELECT 
-			SUM(total_slots) as total_storage_slots,
-			SUM(active_slots) as active_storage_slots,
-			SUM(expired_slots) as expired_storage_slots,
-			COUNT(*) as contracts_with_storage,
-			countIf(expired_slots = 0) as contracts_all_active,
-			countIf(active_slots = 0) as contracts_all_expired,
-			countIf(active_slots > 0 AND expired_slots > 0) as contracts_mixed
-		FROM storage_counts
+// getContractRankings gets contract rankings for top expired and total slots
+func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params QueryParams) (ContractRankings, error) {
+	// Get top contracts by expired slots
+	topExpiredQuery := `
+	SELECT 
+		lower(hex(s.address)) as address,
+		COUNT(*) as total_slots,
+		countIf(s.last_access_block <= ?) as expired_slots,
+		countIf(s.last_access_block > ?) as active_slots,
+		(countIf(s.last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage,
+		max(s.last_access_block) as last_access,
+		any(a.last_access_block > ?) as is_account_active
+	FROM storage_state s
+	LEFT JOIN accounts_state a ON s.address = a.address
+	GROUP BY s.address
+	HAVING expired_slots > 0
+	ORDER BY expired_slots DESC, expiry_percentage DESC
+	LIMIT ?
 	`
 
-	var distribution StorageDistributionAnalysis
-	err := r.db.QueryRowContext(ctx, distributionQuery, expiryBlock, expiryBlock).Scan(
-		&distribution.TotalStorageSlots,
-		&distribution.ActiveStorageSlots,
-		&distribution.ExpiredStorageSlots,
-		&distribution.ContractsWithStorage,
-		&distribution.ContractsAllActive,
-		&distribution.ContractsAllExpired,
-		&distribution.ContractsMixed,
-	)
+	rows, err := r.db.QueryContext(ctx, topExpiredQuery,
+		params.ExpiryBlock, params.ExpiryBlock, params.ExpiryBlock, params.ExpiryBlock, params.TopN)
 	if err != nil {
-		log.Error("Could not get storage distribution", "error", err)
-		return nil, fmt.Errorf("could not get storage distribution: %w", err)
-	}
-
-	// Get top contracts by total storage slots
-	topContractsQuery := `
-		WITH storage_counts AS (
-			SELECT 
-				address,
-				COUNT(*) as total_slots,
-				countIf(last_access_block >= ?) as active_slots,
-				countIf(last_access_block < ?) as expired_slots
-			FROM storage_state
-			GROUP BY address
-		)
-		SELECT 
-			hex(address) as address,
-			total_slots,
-			active_slots,
-			expired_slots,
-			(active_slots * 100.0 / total_slots) as activity_percentage
-		FROM storage_counts
-		ORDER BY total_slots DESC
-		LIMIT ?
-	`
-
-	rows, err := r.db.QueryContext(ctx, topContractsQuery, expiryBlock, expiryBlock, topN)
-	if err != nil {
-		log.Error("Could not get top contracts", "error", err)
-		return nil, fmt.Errorf("could not get top contracts: %w", err)
+		return ContractRankings{}, fmt.Errorf("could not query top expired contracts: %w", err)
 	}
 	defer rows.Close()
 
-	var topContracts []ContractVolumeInfo
+	var topByExpiredSlots []ContractRankingItem
 	for rows.Next() {
-		var contract ContractVolumeInfo
-		err := rows.Scan(
-			&contract.Address,
-			&contract.TotalSlots,
-			&contract.ActiveSlots,
-			&contract.ExpiredSlots,
-			&contract.ActivityPercentage,
-		)
+		var item ContractRankingItem
+		var addressHex string
+		err := rows.Scan(&addressHex, &item.TotalSlots, &item.ExpiredSlots, &item.ActiveSlots,
+			&item.ExpiryPercentage, &item.LastAccess, &item.IsAccountActive)
 		if err != nil {
-			log.Error("Could not scan contract volume info", "error", err)
-			return nil, fmt.Errorf("could not scan contract volume info: %w", err)
+			return ContractRankings{}, fmt.Errorf("could not scan contract ranking row: %w", err)
 		}
-		contract.IsActive = contract.ActiveSlots > 0
-		topContracts = append(topContracts, contract)
+		item.Address = "0x" + addressHex
+		topByExpiredSlots = append(topByExpiredSlots, item)
 	}
 
-	if err := rows.Err(); err != nil {
-		log.Error("Row iteration error", "error", err)
-		return nil, fmt.Errorf("row iteration error: %w", err)
+	// Get top contracts by total slots
+	topTotalQuery := `
+	SELECT 
+		lower(hex(s.address)) as address,
+		COUNT(*) as total_slots,
+		countIf(s.last_access_block <= ?) as expired_slots,
+		countIf(s.last_access_block > ?) as active_slots,
+		(countIf(s.last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage,
+		max(s.last_access_block) as last_access,
+		any(a.last_access_block > ?) as is_account_active
+	FROM storage_state s
+	LEFT JOIN accounts_state a ON s.address = a.address
+	GROUP BY s.address
+	ORDER BY total_slots DESC
+	LIMIT ?
+	`
+
+	rows, err = r.db.QueryContext(ctx, topTotalQuery,
+		params.ExpiryBlock, params.ExpiryBlock, params.ExpiryBlock, params.ExpiryBlock, params.TopN)
+	if err != nil {
+		return ContractRankings{}, fmt.Errorf("could not query top total contracts: %w", err)
+	}
+	defer rows.Close()
+
+	var topByTotalSlots []ContractRankingItem
+	for rows.Next() {
+		var item ContractRankingItem
+		var addressHex string
+		err := rows.Scan(&addressHex, &item.TotalSlots, &item.ExpiredSlots, &item.ActiveSlots,
+			&item.ExpiryPercentage, &item.LastAccess, &item.IsAccountActive)
+		if err != nil {
+			return ContractRankings{}, fmt.Errorf("could not scan contract ranking row: %w", err)
+		}
+		item.Address = "0x" + addressHex
+		topByTotalSlots = append(topByTotalSlots, item)
 	}
 
-	// Calculate volume statistics
-	var volumeStats VolumeStatisticsAnalysis
-	if distribution.ContractsWithStorage > 0 {
-		volumeStats.AverageStoragePerContract = float64(distribution.TotalStorageSlots) / float64(distribution.ContractsWithStorage)
-		volumeStats.StorageUtilization = float64(distribution.ActiveStorageSlots) / float64(distribution.TotalStorageSlots) * 100
-	}
-
-	log.Info("Successfully completed ClickHouse storage volume analytics")
-	return &StorageVolumeAnalysis{
-		StorageDistribution: distribution,
-		ContractRankings: ContractRankingsAnalysis{
-			TopContractsByTotalSlots:   topContracts,
-			TopContractsByActiveSlots:  []ContractVolumeInfo{},
-			TopContractsByExpiredSlots: []ContractVolumeInfo{},
-			ContractsAllActiveStorage:  []ContractVolumeInfo{},
-		},
-		VolumeStatistics: volumeStats,
-		ActivityAnalysis: StorageActivityAnalysis{
-			StorageLifespanStats: StorageLifespanStats{},
-		},
+	return ContractRankings{
+		TopByExpiredSlots: topByExpiredSlots,
+		TopByTotalSlots:   topByTotalSlots,
 	}, nil
+}
+
+// getContractExpiryAnalysis gets contract expiry distribution analysis
+func (r *ClickHouseRepository) getContractExpiryAnalysis(ctx context.Context, params QueryParams) (ContractExpiryAnalysis, error) {
+	query := `
+	WITH contract_expiry_stats AS (
+		SELECT 
+			address,
+			(countIf(last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage
+		FROM storage_state
+		GROUP BY address
+		HAVING COUNT(*) > 0
+	)
+	SELECT 
+		avg(expiry_percentage) as avg_expiry,
+		quantile(0.5)(expiry_percentage) as median_expiry,
+		COUNT(*) as contracts_analyzed
+	FROM contract_expiry_stats
+	`
+
+	var avgExpiry, medianExpiry float64
+	var contractsAnalyzed int
+
+	err := r.db.QueryRowContext(ctx, query, params.ExpiryBlock).Scan(
+		&avgExpiry, &medianExpiry, &contractsAnalyzed,
+	)
+	if err != nil {
+		return ContractExpiryAnalysis{}, fmt.Errorf("could not get contract expiry analysis: %w", err)
+	}
+
+	// Get expiry distribution buckets
+	distribution, err := r.getExpiryDistributionBuckets(ctx, params)
+	if err != nil {
+		return ContractExpiryAnalysis{}, fmt.Errorf("could not get expiry distribution: %w", err)
+	}
+
+	return ContractExpiryAnalysis{
+		AverageExpiryPercentage: avgExpiry,
+		MedianExpiryPercentage:  medianExpiry,
+		ExpiryDistribution:      distribution,
+		ContractsAnalyzed:       contractsAnalyzed,
+	}, nil
+}
+
+// getExpiryDistributionBuckets gets expiry distribution buckets
+func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context, params QueryParams) ([]ExpiryDistributionBucket, error) {
+	query := `
+	WITH contract_expiry_stats AS (
+		SELECT 
+			address,
+			(countIf(last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage
+		FROM storage_state
+		GROUP BY address
+		HAVING COUNT(*) > 0
+	),
+	bucketed_stats AS (
+		SELECT 
+			CASE 
+				WHEN expiry_percentage = 0 THEN 0
+				WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN 1
+				WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN 21
+				WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN 51
+				WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN 81
+				WHEN expiry_percentage = 100 THEN 100
+			END as bucket_start,
+			CASE 
+				WHEN expiry_percentage = 0 THEN 0
+				WHEN expiry_percentage > 0 AND expiry_percentage <= 20 THEN 20
+				WHEN expiry_percentage > 20 AND expiry_percentage <= 50 THEN 50
+				WHEN expiry_percentage > 50 AND expiry_percentage <= 80 THEN 80
+				WHEN expiry_percentage > 80 AND expiry_percentage < 100 THEN 99
+				WHEN expiry_percentage = 100 THEN 100
+			END as bucket_end
+		FROM contract_expiry_stats
+	)
+	SELECT 
+		bucket_start,
+		bucket_end,
+		COUNT(*) as count
+	FROM bucketed_stats
+	GROUP BY bucket_start, bucket_end
+	ORDER BY bucket_start
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, params.ExpiryBlock)
+	if err != nil {
+		return nil, fmt.Errorf("could not query expiry distribution: %w", err)
+	}
+	defer rows.Close()
+
+	var buckets []ExpiryDistributionBucket
+	for rows.Next() {
+		var bucket ExpiryDistributionBucket
+		err := rows.Scan(&bucket.RangeStart, &bucket.RangeEnd, &bucket.Count)
+		if err != nil {
+			return nil, fmt.Errorf("could not scan bucket row: %w", err)
+		}
+		buckets = append(buckets, bucket)
+	}
+
+	return buckets, nil
+}
+
+// getContractVolumeAnalysis gets contract volume analysis
+func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, params QueryParams) (ContractVolumeAnalysis, error) {
+	query := `
+	WITH contract_storage_counts AS (
+		SELECT 
+			address,
+			COUNT(*) as slot_count
+		FROM storage_state
+		GROUP BY address
+	)
+	SELECT 
+		avg(slot_count) as avg_storage,
+		quantile(0.5)(slot_count) as median_storage,
+		max(slot_count) as max_storage,
+		min(slot_count) as min_storage,
+		COUNT(*) as total_contracts
+	FROM contract_storage_counts
+	`
+
+	var avgStorage, medianStorage float64
+	var maxStorage, minStorage, totalContracts int
+
+	err := r.db.QueryRowContext(ctx, query).Scan(
+		&avgStorage, &medianStorage, &maxStorage, &minStorage, &totalContracts,
+	)
+	if err != nil {
+		return ContractVolumeAnalysis{}, fmt.Errorf("could not get contract volume analysis: %w", err)
+	}
+
+	return ContractVolumeAnalysis{
+		AverageStoragePerContract: avgStorage,
+		MedianStoragePerContract:  medianStorage,
+		MaxStoragePerContract:     maxStorage,
+		MinStoragePerContract:     minStorage,
+		TotalContracts:            totalContracts,
+	}, nil
+}
+
+// getContractStatusAnalysis gets contract status analysis
+func (r *ClickHouseRepository) getContractStatusAnalysis(ctx context.Context, params QueryParams) (ContractStatusAnalysis, error) {
+	query := `
+	WITH contract_status AS (
+		SELECT 
+			s.address,
+			COUNT(*) as total_slots,
+			countIf(s.last_access_block <= ?) as expired_slots,
+			any(a.last_access_block > ?) as account_active
+		FROM storage_state s
+		LEFT JOIN accounts_state a ON s.address = a.address
+		GROUP BY s.address
+	)
+	SELECT 
+		countIf(expired_slots = total_slots) as all_expired_contracts,
+		countIf(expired_slots = 0) as all_active_contracts,
+		countIf(expired_slots > 0 AND expired_slots < total_slots) as mixed_state_contracts,
+		countIf(account_active = 1 AND expired_slots > 0) as active_with_expired_storage,
+		COUNT(*) as total_contracts
+	FROM contract_status
+	`
+
+	var allExpired, allActive, mixedState, activeWithExpired, totalContracts int
+
+	err := r.db.QueryRowContext(ctx, query, params.ExpiryBlock, params.ExpiryBlock).Scan(
+		&allExpired, &allActive, &mixedState, &activeWithExpired, &totalContracts,
+	)
+	if err != nil {
+		return ContractStatusAnalysis{}, fmt.Errorf("could not get contract status analysis: %w", err)
+	}
+
+	var allExpiredRate, allActiveRate float64
+	if totalContracts > 0 {
+		allExpiredRate = float64(allExpired) / float64(totalContracts) * 100
+		allActiveRate = float64(allActive) / float64(totalContracts) * 100
+	}
+
+	return ContractStatusAnalysis{
+		AllExpiredContracts:      allExpired,
+		AllActiveContracts:       allActive,
+		MixedStateContracts:      mixedState,
+		ActiveWithExpiredStorage: activeWithExpired,
+		AllExpiredRate:           allExpiredRate,
+		AllActiveRate:            allActiveRate,
+	}, nil
+}
+
+// GetBlockActivityAnalytics - Questions 6, 12, 13, 14
+func (r *ClickHouseRepository) GetBlockActivityAnalytics(ctx context.Context, params QueryParams) (*BlockActivityAnalytics, error) {
+	log := logger.GetLogger("clickhouse-repo")
+	startTime := time.Now()
+
+	// Get top activity blocks
+	topBlocks, err := r.GetTopActivityBlocks(ctx, params.StartBlock, params.EndBlock, params.TopN)
+	if err != nil {
+		return nil, fmt.Errorf("could not get top activity blocks: %w", err)
+	}
+
+	// Get time series data
+	timeSeriesData, err := r.GetTimeSeriesData(ctx, params.StartBlock, params.EndBlock, params.WindowSize)
+	if err != nil {
+		return nil, fmt.Errorf("could not get time series data: %w", err)
+	}
+
+	// Get access rates
+	accessRates, err := r.GetAccessRates(ctx, params.StartBlock, params.EndBlock)
+	if err != nil {
+		return nil, fmt.Errorf("could not get access rates: %w", err)
+	}
+
+	// Get frequency data
+	frequencyData, err := r.getFrequencyAnalysis(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get frequency analysis: %w", err)
+	}
+
+	// Get trend data
+	trendData, err := r.GetTrendAnalysis(ctx, params.StartBlock, params.EndBlock)
+	if err != nil {
+		return nil, fmt.Errorf("could not get trend analysis: %w", err)
+	}
+
+	result := &BlockActivityAnalytics{
+		TopBlocks:      topBlocks,
+		TimeSeriesData: timeSeriesData,
+		AccessRates:    *accessRates,
+		FrequencyData:  frequencyData,
+		TrendData:      *trendData,
+	}
+
+	log.Debug("Retrieved block activity analytics",
+		"top_blocks_count", len(topBlocks),
+		"time_series_count", len(timeSeriesData),
+		"duration_ms", time.Since(startTime).Milliseconds())
+
+	return result, nil
+}
+
+// getFrequencyAnalysis gets frequency analysis data
+func (r *ClickHouseRepository) getFrequencyAnalysis(ctx context.Context, params QueryParams) (FrequencyAnalysis, error) {
+	// Get account frequency data
+	accountFreq, err := r.getMostFrequentAccounts(ctx, params.TopN)
+	if err != nil {
+		return FrequencyAnalysis{}, fmt.Errorf("could not get account frequency: %w", err)
+	}
+
+	// Get storage frequency data
+	storageFreq, err := r.getMostFrequentStorage(ctx, params.TopN)
+	if err != nil {
+		return FrequencyAnalysis{}, fmt.Errorf("could not get storage frequency: %w", err)
+	}
+
+	return FrequencyAnalysis{
+		AccountFrequency: accountFreq,
+		StorageFrequency: storageFreq,
+	}, nil
+}
+
+// getMostFrequentAccounts gets most frequently accessed accounts
+func (r *ClickHouseRepository) getMostFrequentAccounts(ctx context.Context, topN int) (AccountFrequencyData, error) {
+	query := `
+	SELECT 
+		avg(access_count) as avg_frequency,
+		quantile(0.5)(access_count) as median_frequency
+	FROM account_access_count_agg
+	`
+
+	var avgFreq, medianFreq float64
+	err := r.db.QueryRowContext(ctx, query).Scan(&avgFreq, &medianFreq)
+	if err != nil {
+		return AccountFrequencyData{}, fmt.Errorf("could not get account frequency stats: %w", err)
+	}
+
+	// Get most frequent accounts
+	frequentQuery := `
+	SELECT 
+		lower(hex(a.address)) as address,
+		ac.access_count,
+		a.is_contract
+	FROM account_access_count_agg ac
+	JOIN accounts_state a ON ac.address = a.address
+	ORDER BY ac.access_count DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, frequentQuery, topN)
+	if err != nil {
+		return AccountFrequencyData{}, fmt.Errorf("could not query frequent accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var frequentAccounts []FrequentAccount
+	for rows.Next() {
+		var account FrequentAccount
+		var addressHex string
+		var isContract int
+		err := rows.Scan(&addressHex, &account.AccessCount, &isContract)
+		if err != nil {
+			return AccountFrequencyData{}, fmt.Errorf("could not scan frequent account: %w", err)
+		}
+		account.Address = "0x" + addressHex
+		account.IsContract = isContract == 1
+		frequentAccounts = append(frequentAccounts, account)
+	}
+
+	return AccountFrequencyData{
+		AverageFrequency:     avgFreq,
+		MedianFrequency:      medianFreq,
+		MostFrequentAccounts: frequentAccounts,
+	}, nil
+}
+
+// getMostFrequentStorage gets most frequently accessed storage slots
+func (r *ClickHouseRepository) getMostFrequentStorage(ctx context.Context, topN int) (StorageFrequencyData, error) {
+	query := `
+	SELECT 
+		avg(access_count) as avg_frequency,
+		quantile(0.5)(access_count) as median_frequency
+	FROM storage_access_count_agg
+	`
+
+	var avgFreq, medianFreq float64
+	err := r.db.QueryRowContext(ctx, query).Scan(&avgFreq, &medianFreq)
+	if err != nil {
+		return StorageFrequencyData{}, fmt.Errorf("could not get storage frequency stats: %w", err)
+	}
+
+	// Get most frequent storage slots
+	frequentQuery := `
+	SELECT 
+		lower(hex(address)) as address,
+		lower(hex(storage_slot)) as storage_slot,
+		access_count
+	FROM storage_access_count_agg
+	ORDER BY access_count DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, frequentQuery, topN)
+	if err != nil {
+		return StorageFrequencyData{}, fmt.Errorf("could not query frequent storage: %w", err)
+	}
+	defer rows.Close()
+
+	var frequentStorage []FrequentStorage
+	for rows.Next() {
+		var storage FrequentStorage
+		var addressHex, slotHex string
+		err := rows.Scan(&addressHex, &slotHex, &storage.AccessCount)
+		if err != nil {
+			return StorageFrequencyData{}, fmt.Errorf("could not scan frequent storage: %w", err)
+		}
+		storage.Address = "0x" + addressHex
+		storage.StorageSlot = "0x" + slotHex
+		frequentStorage = append(frequentStorage, storage)
+	}
+
+	return StorageFrequencyData{
+		AverageFrequency:  avgFreq,
+		MedianFrequency:   medianFreq,
+		MostFrequentSlots: frequentStorage,
+	}, nil
+}
+
+// GetUnifiedAnalytics - All Questions 1-15
+func (r *ClickHouseRepository) GetUnifiedAnalytics(ctx context.Context, params QueryParams) (*UnifiedAnalytics, error) {
+	log := logger.GetLogger("clickhouse-repo")
+	startTime := time.Now()
+
+	// Get all analytics components in parallel (if needed)
+	accountAnalytics, err := r.GetAccountAnalytics(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get account analytics: %w", err)
+	}
+
+	storageAnalytics, err := r.GetStorageAnalytics(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get storage analytics: %w", err)
+	}
+
+	contractAnalytics, err := r.GetContractAnalytics(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get contract analytics: %w", err)
+	}
+
+	blockActivityAnalytics, err := r.GetBlockActivityAnalytics(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("could not get block activity analytics: %w", err)
+	}
+
+	result := &UnifiedAnalytics{
+		Accounts:      *accountAnalytics,
+		Storage:       *storageAnalytics,
+		Contracts:     *contractAnalytics,
+		BlockActivity: *blockActivityAnalytics,
+		Metadata: AnalyticsMetadata{
+			ExpiryBlock:   params.ExpiryBlock,
+			CurrentBlock:  params.CurrentBlock,
+			AnalysisRange: params.EndBlock - params.StartBlock,
+			GeneratedAt:   time.Now().Unix(),
+			QueryDuration: time.Since(startTime).Milliseconds(),
+		},
+	}
+
+	log.Debug("Retrieved unified analytics",
+		"expiry_block", params.ExpiryBlock,
+		"duration_ms", time.Since(startTime).Milliseconds())
+
+	return result, nil
+}
+
+// ==============================================================================
+// SPECIALIZED EFFICIENT QUERIES
+// ==============================================================================
+
+// GetBasicStats gets basic statistics for quick overview
+func (r *ClickHouseRepository) GetBasicStats(ctx context.Context, expiryBlock uint64) (*BasicStats, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	// Single query to get basic stats
+	query := `
+	SELECT 
+		countIf(is_contract = 0) as total_eoas,
+		countIf(is_contract = 1) as total_contracts,
+		countIf(is_contract = 0 AND last_access_block <= ?) as expired_eoas,
+		countIf(is_contract = 1 AND last_access_block <= ?) as expired_contracts,
+		(SELECT COUNT(*) FROM storage_state) as total_slots,
+		(SELECT countIf(last_access_block <= ?) FROM storage_state) as expired_slots
+	FROM accounts_state
+	`
+
+	var totalEOAs, totalContracts, expiredEOAs, expiredContracts, totalSlots, expiredSlots int
+
+	err := r.db.QueryRowContext(ctx, query, expiryBlock, expiryBlock, expiryBlock).Scan(
+		&totalEOAs, &totalContracts, &expiredEOAs, &expiredContracts, &totalSlots, &expiredSlots,
+	)
+	if err != nil {
+		log.Error("Could not get basic stats", "error", err)
+		return nil, fmt.Errorf("could not get basic stats: %w", err)
+	}
+
+	result := &BasicStats{
+		Accounts: BasicAccountStats{
+			TotalEOAs:        totalEOAs,
+			TotalContracts:   totalContracts,
+			ExpiredEOAs:      expiredEOAs,
+			ExpiredContracts: expiredContracts,
+		},
+		Storage: BasicStorageStats{
+			TotalSlots:   totalSlots,
+			ExpiredSlots: expiredSlots,
+		},
+		Metadata: BasicMetadata{
+			ExpiryBlock: expiryBlock,
+			GeneratedAt: time.Now().Unix(),
+		},
+	}
+
+	log.Debug("Retrieved basic stats",
+		"total_accounts", totalEOAs+totalContracts,
+		"total_slots", totalSlots,
+		"expiry_block", expiryBlock)
+
+	return result, nil
+}
+
+// GetTopContractsByExpiredSlots gets top contracts by expired slots
+func (r *ClickHouseRepository) GetTopContractsByExpiredSlots(ctx context.Context, expiryBlock uint64, topN int) ([]ContractRankingItem, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	SELECT 
+		lower(hex(s.address)) as address,
+		COUNT(*) as total_slots,
+		countIf(s.last_access_block <= ?) as expired_slots,
+		countIf(s.last_access_block > ?) as active_slots,
+		(countIf(s.last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage,
+		max(s.last_access_block) as last_access,
+		any(a.last_access_block > ?) as is_account_active
+	FROM storage_state s
+	LEFT JOIN accounts_state a ON s.address = a.address
+	GROUP BY s.address
+	HAVING expired_slots > 0
+	ORDER BY expired_slots DESC, expiry_percentage DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, expiryBlock, expiryBlock, expiryBlock, expiryBlock, topN)
+	if err != nil {
+		log.Error("Could not query top contracts by expired slots", "error", err)
+		return nil, fmt.Errorf("could not query top contracts by expired slots: %w", err)
+	}
+	defer rows.Close()
+
+	var contracts []ContractRankingItem
+	for rows.Next() {
+		var contract ContractRankingItem
+		var addressHex string
+		err := rows.Scan(&addressHex, &contract.TotalSlots, &contract.ExpiredSlots, &contract.ActiveSlots,
+			&contract.ExpiryPercentage, &contract.LastAccess, &contract.IsAccountActive)
+		if err != nil {
+			log.Error("Could not scan contract ranking row", "error", err)
+			return nil, fmt.Errorf("could not scan contract ranking row: %w", err)
+		}
+		contract.Address = "0x" + addressHex
+		contracts = append(contracts, contract)
+	}
+
+	log.Debug("Retrieved top contracts by expired slots", "count", len(contracts))
+	return contracts, nil
+}
+
+// GetTopContractsByTotalSlots gets top contracts by total slots
+func (r *ClickHouseRepository) GetTopContractsByTotalSlots(ctx context.Context, topN int) ([]ContractRankingItem, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	SELECT 
+		lower(hex(s.address)) as address,
+		COUNT(*) as total_slots,
+		0 as expired_slots,
+		COUNT(*) as active_slots,
+		0 as expiry_percentage,
+		max(s.last_access_block) as last_access,
+		1 as is_account_active
+	FROM storage_state s
+	GROUP BY s.address
+	ORDER BY total_slots DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, topN)
+	if err != nil {
+		log.Error("Could not query top contracts by total slots", "error", err)
+		return nil, fmt.Errorf("could not query top contracts by total slots: %w", err)
+	}
+	defer rows.Close()
+
+	var contracts []ContractRankingItem
+	for rows.Next() {
+		var contract ContractRankingItem
+		var addressHex string
+		err := rows.Scan(&addressHex, &contract.TotalSlots, &contract.ExpiredSlots, &contract.ActiveSlots,
+			&contract.ExpiryPercentage, &contract.LastAccess, &contract.IsAccountActive)
+		if err != nil {
+			log.Error("Could not scan contract ranking row", "error", err)
+			return nil, fmt.Errorf("could not scan contract ranking row: %w", err)
+		}
+		contract.Address = "0x" + addressHex
+		contracts = append(contracts, contract)
+	}
+
+	log.Debug("Retrieved top contracts by total slots", "count", len(contracts))
+	return contracts, nil
+}
+
+// GetTopActivityBlocks gets top activity blocks
+func (r *ClickHouseRepository) GetTopActivityBlocks(ctx context.Context, startBlock, endBlock uint64, topN int) ([]BlockActivity, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	SELECT 
+		block_number,
+		countIf(is_contract = 0) as eoa_accesses,
+		countIf(is_contract = 1) as contract_accesses,
+		COUNT(*) as account_accesses,
+		(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as storage_accesses
+	FROM account_access aa
+	WHERE block_number >= ? AND block_number <= ?
+	GROUP BY block_number
+	ORDER BY (account_accesses + storage_accesses) DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, startBlock, endBlock, topN)
+	if err != nil {
+		log.Error("Could not query top activity blocks", "error", err)
+		return nil, fmt.Errorf("could not query top activity blocks: %w", err)
+	}
+	defer rows.Close()
+
+	var blocks []BlockActivity
+	for rows.Next() {
+		var block BlockActivity
+		err := rows.Scan(&block.BlockNumber, &block.EOAAccesses, &block.ContractAccesses,
+			&block.AccountAccesses, &block.StorageAccesses)
+		if err != nil {
+			log.Error("Could not scan block activity row", "error", err)
+			return nil, fmt.Errorf("could not scan block activity row: %w", err)
+		}
+		block.TotalAccesses = block.AccountAccesses + block.StorageAccesses
+		blocks = append(blocks, block)
+	}
+
+	log.Debug("Retrieved top activity blocks", "count", len(blocks))
+	return blocks, nil
+}
+
+// GetMostFrequentAccounts gets most frequently accessed accounts
+func (r *ClickHouseRepository) GetMostFrequentAccounts(ctx context.Context, topN int) ([]FrequentAccount, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	SELECT 
+		lower(hex(a.address)) as address,
+		ac.access_count,
+		a.is_contract
+	FROM account_access_count_agg ac
+	JOIN accounts_state a ON ac.address = a.address
+	ORDER BY ac.access_count DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, topN)
+	if err != nil {
+		log.Error("Could not query most frequent accounts", "error", err)
+		return nil, fmt.Errorf("could not query most frequent accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var accounts []FrequentAccount
+	for rows.Next() {
+		var account FrequentAccount
+		var addressHex string
+		var isContract int
+		err := rows.Scan(&addressHex, &account.AccessCount, &isContract)
+		if err != nil {
+			log.Error("Could not scan frequent account row", "error", err)
+			return nil, fmt.Errorf("could not scan frequent account row: %w", err)
+		}
+		account.Address = "0x" + addressHex
+		account.IsContract = isContract == 1
+		accounts = append(accounts, account)
+	}
+
+	log.Debug("Retrieved most frequent accounts", "count", len(accounts))
+	return accounts, nil
+}
+
+// GetMostFrequentStorage gets most frequently accessed storage slots
+func (r *ClickHouseRepository) GetMostFrequentStorage(ctx context.Context, topN int) ([]FrequentStorage, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	SELECT 
+		lower(hex(address)) as address,
+		lower(hex(storage_slot)) as storage_slot,
+		access_count
+	FROM storage_access_count_agg
+	ORDER BY access_count DESC
+	LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, topN)
+	if err != nil {
+		log.Error("Could not query most frequent storage", "error", err)
+		return nil, fmt.Errorf("could not query most frequent storage: %w", err)
+	}
+	defer rows.Close()
+
+	var storage []FrequentStorage
+	for rows.Next() {
+		var slot FrequentStorage
+		var addressHex, slotHex string
+		err := rows.Scan(&addressHex, &slotHex, &slot.AccessCount)
+		if err != nil {
+			log.Error("Could not scan frequent storage row", "error", err)
+			return nil, fmt.Errorf("could not scan frequent storage row: %w", err)
+		}
+		slot.Address = "0x" + addressHex
+		slot.StorageSlot = "0x" + slotHex
+		storage = append(storage, slot)
+	}
+
+	log.Debug("Retrieved most frequent storage", "count", len(storage))
+	return storage, nil
+}
+
+// GetTimeSeriesData gets time series data for access patterns
+func (r *ClickHouseRepository) GetTimeSeriesData(ctx context.Context, startBlock, endBlock uint64, windowSize int) ([]TimeSeriesPoint, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	WITH window_bounds AS (
+		SELECT 
+			intDiv(block_number, ?) * ? as window_start,
+			(intDiv(block_number, ?) + 1) * ? as window_end,
+			block_number
+		FROM (
+			SELECT DISTINCT block_number
+			FROM account_access
+			WHERE block_number >= ? AND block_number <= ?
+			UNION ALL
+			SELECT DISTINCT block_number
+			FROM storage_access
+			WHERE block_number >= ? AND block_number <= ?
+		)
+	),
+	windowed_data AS (
+		SELECT 
+			window_start,
+			window_end,
+			COUNT(DISTINCT aa.address) as account_accesses,
+			(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number >= wb.window_start AND sa.block_number < wb.window_end) as storage_accesses
+		FROM window_bounds wb
+		LEFT JOIN account_access aa ON aa.block_number >= wb.window_start AND aa.block_number < wb.window_end
+		GROUP BY window_start, window_end
+	)
+	SELECT 
+		window_start,
+		window_end,
+		account_accesses,
+		storage_accesses,
+		account_accesses + storage_accesses as total_accesses,
+		(account_accesses + storage_accesses) / ? as accesses_per_block
+	FROM windowed_data
+	ORDER BY window_start
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, windowSize, windowSize, windowSize, windowSize,
+		startBlock, endBlock, startBlock, endBlock, windowSize)
+	if err != nil {
+		log.Error("Could not query time series data", "error", err)
+		return nil, fmt.Errorf("could not query time series data: %w", err)
+	}
+	defer rows.Close()
+
+	var timeSeriesData []TimeSeriesPoint
+	for rows.Next() {
+		var point TimeSeriesPoint
+		err := rows.Scan(&point.WindowStart, &point.WindowEnd, &point.AccountAccesses,
+			&point.StorageAccesses, &point.TotalAccesses, &point.AccessesPerBlock)
+		if err != nil {
+			log.Error("Could not scan time series row", "error", err)
+			return nil, fmt.Errorf("could not scan time series row: %w", err)
+		}
+		timeSeriesData = append(timeSeriesData, point)
+	}
+
+	log.Debug("Retrieved time series data", "count", len(timeSeriesData))
+	return timeSeriesData, nil
+}
+
+// GetAccessRates gets access rate analysis
+func (r *ClickHouseRepository) GetAccessRates(ctx context.Context, startBlock, endBlock uint64) (*AccessRateAnalysis, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	WITH block_stats AS (
+		SELECT 
+			block_number,
+			COUNT(DISTINCT aa.address) as accounts_per_block,
+			(SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as storage_per_block
+		FROM account_access aa
+		WHERE block_number >= ? AND block_number <= ?
+		GROUP BY block_number
+	)
+	SELECT 
+		avg(accounts_per_block) as avg_accounts_per_block,
+		avg(storage_per_block) as avg_storage_per_block,
+		avg(accounts_per_block + storage_per_block) as avg_total_per_block,
+		COUNT(*) as blocks_analyzed
+	FROM block_stats
+	`
+
+	var avgAccountsPerBlock, avgStoragePerBlock, avgTotalPerBlock float64
+	var blocksAnalyzed int
+
+	err := r.db.QueryRowContext(ctx, query, startBlock, endBlock).Scan(
+		&avgAccountsPerBlock, &avgStoragePerBlock, &avgTotalPerBlock, &blocksAnalyzed,
+	)
+	if err != nil {
+		log.Error("Could not get access rates", "error", err)
+		return nil, fmt.Errorf("could not get access rates: %w", err)
+	}
+
+	result := &AccessRateAnalysis{
+		AccountsPerBlock:      avgAccountsPerBlock,
+		StoragePerBlock:       avgStoragePerBlock,
+		TotalAccessesPerBlock: avgTotalPerBlock,
+		BlocksAnalyzed:        blocksAnalyzed,
+	}
+
+	log.Debug("Retrieved access rates", "blocks_analyzed", blocksAnalyzed)
+	return result, nil
+}
+
+// GetTrendAnalysis gets trend analysis
+func (r *ClickHouseRepository) GetTrendAnalysis(ctx context.Context, startBlock, endBlock uint64) (*TrendAnalysis, error) {
+	log := logger.GetLogger("clickhouse-repo")
+
+	query := `
+	WITH block_activity AS (
+		SELECT 
+			block_number,
+			COUNT(DISTINCT aa.address) + (SELECT COUNT(*) FROM storage_access sa WHERE sa.block_number = aa.block_number) as total_activity
+		FROM account_access aa
+		WHERE block_number >= ? AND block_number <= ?
+		GROUP BY block_number
+	),
+	trend_stats AS (
+		SELECT 
+			block_number,
+			total_activity,
+			argMax(total_activity, block_number) as peak_activity,
+			argMin(total_activity, block_number) as low_activity,
+			first_value(total_activity) OVER (ORDER BY block_number) as first_activity,
+			last_value(total_activity) OVER (ORDER BY block_number) as last_activity
+		FROM block_activity
+	)
+	SELECT 
+		CASE 
+			WHEN last_activity > first_activity * 1.1 THEN 'increasing'
+			WHEN last_activity < first_activity * 0.9 THEN 'decreasing'
+			ELSE 'stable'
+		END as trend_direction,
+		(last_activity - first_activity) / first_activity * 100 as growth_rate,
+		argMax(block_number, total_activity) as peak_activity_block,
+		argMin(block_number, total_activity) as low_activity_block
+	FROM trend_stats
+	LIMIT 1
+	`
+
+	var trendDirection string
+	var growthRate float64
+	var peakActivityBlock, lowActivityBlock uint64
+
+	err := r.db.QueryRowContext(ctx, query, startBlock, endBlock).Scan(
+		&trendDirection, &growthRate, &peakActivityBlock, &lowActivityBlock,
+	)
+	if err != nil {
+		log.Error("Could not get trend analysis", "error", err)
+		return nil, fmt.Errorf("could not get trend analysis: %w", err)
+	}
+
+	result := &TrendAnalysis{
+		TrendDirection:    trendDirection,
+		GrowthRate:        growthRate,
+		PeakActivityBlock: peakActivityBlock,
+		LowActivityBlock:  lowActivityBlock,
+	}
+
+	log.Debug("Retrieved trend analysis", "trend", trendDirection, "growth_rate", growthRate)
+	return result, nil
+}
+
+// GetContractExpiryDistribution gets contract expiry distribution
+func (r *ClickHouseRepository) GetContractExpiryDistribution(ctx context.Context, expiryBlock uint64) ([]ExpiryDistributionBucket, error) {
+	return r.getExpiryDistributionBuckets(ctx, QueryParams{ExpiryBlock: expiryBlock})
+}
+
+// GetContractStatusBreakdown gets contract status breakdown
+func (r *ClickHouseRepository) GetContractStatusBreakdown(ctx context.Context, expiryBlock uint64) (*ContractStatusAnalysis, error) {
+	result, err := r.getContractStatusAnalysis(ctx, QueryParams{ExpiryBlock: expiryBlock})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

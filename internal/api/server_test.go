@@ -222,7 +222,7 @@ func TestAPIServerConcurrency(t *testing.T) {
 
 				assert.Equal(t, http.StatusOK, rr.Code)
 
-				var analytics repository.AnalyticsData
+				var analytics repository.UnifiedAnalytics
 				err = json.Unmarshal(rr.Body.Bytes(), &analytics)
 				assert.NoError(t, err)
 			}(i)
@@ -290,19 +290,16 @@ func testAnalyticsEndpoint(t *testing.T, server *TestServer) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	var analytics repository.AnalyticsData
+	var analytics repository.UnifiedAnalytics
 	err = json.Unmarshal(rr.Body.Bytes(), &analytics)
 	require.NoError(t, err)
 
 	// Verify analytics data structure
-	assert.NotNil(t, analytics.AccountExpiry)
-	assert.NotNil(t, analytics.AccountDistribution)
-	assert.NotNil(t, analytics.StorageSlotExpiry)
-	assert.NotNil(t, analytics.ContractStorage)
-	assert.NotNil(t, analytics.StorageExpiry)
-	assert.NotNil(t, analytics.FullyExpiredContracts)
-	assert.NotNil(t, analytics.ActiveContractsExpiredStorage)
-	assert.NotNil(t, analytics.CompleteExpiry)
+	assert.NotNil(t, analytics.Accounts)
+	assert.NotNil(t, analytics.Storage)
+	assert.NotNil(t, analytics.Contracts)
+	assert.NotNil(t, analytics.BlockActivity)
+	assert.NotNil(t, analytics.Metadata)
 
 	// Test with different expiry_block values
 	testCases := []uint64{50, 150, 200, 500}
@@ -315,13 +312,13 @@ func testAnalyticsEndpoint(t *testing.T, server *TestServer) {
 
 		assert.Equal(t, http.StatusOK, rr.Code)
 
-		var analytics repository.AnalyticsData
+		var analytics repository.UnifiedAnalytics
 		err = json.Unmarshal(rr.Body.Bytes(), &analytics)
 		require.NoError(t, err)
 
 		// Verify response structure is consistent
-		assert.NotNil(t, analytics.AccountExpiry)
-		assert.NotNil(t, analytics.StorageSlotExpiry)
+		assert.NotNil(t, analytics.Accounts)
+		assert.NotNil(t, analytics.Storage)
 	}
 }
 
@@ -431,7 +428,16 @@ func (s *TestServer) handleGetAnalytics(w http.ResponseWriter, r *http.Request) 
 
 	currentBlock := latestBlockBig.Uint64()
 
-	analytics, err := s.repo.GetAnalyticsData(r.Context(), expiryBlock, currentBlock)
+	params := repository.QueryParams{
+		ExpiryBlock:  expiryBlock,
+		CurrentBlock: currentBlock,
+		StartBlock:   expiryBlock - 10000,
+		EndBlock:     currentBlock,
+		TopN:         10,
+		WindowSize:   1000,
+	}
+
+	analytics, err := s.repo.GetUnifiedAnalytics(r.Context(), params)
 	if err != nil {
 		s.log.Error("Failed to get analytics data",
 			"error", err,
@@ -445,10 +451,8 @@ func (s *TestServer) handleGetAnalytics(w http.ResponseWriter, r *http.Request) 
 	s.log.Debug("Served analytics data",
 		"expiry_block", expiryBlock,
 		"current_block", currentBlock,
-		"expired_accounts", analytics.AccountExpiry.TotalExpiredAccounts,
-		"total_accounts", analytics.AccountExpiry.TotalAccounts,
-		"expired_slots", analytics.StorageSlotExpiry.ExpiredSlots,
-		"total_slots", analytics.StorageSlotExpiry.TotalSlots,
+		"total_accounts", analytics.Accounts.Total.Total,
+		"total_slots", analytics.Storage.Total.TotalSlots,
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, analytics)
 }

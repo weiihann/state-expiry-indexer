@@ -21,6 +21,41 @@ The current analytics system provides basic state expiry analysis but needs comp
 - Storage volume analysis - Questions 10, 15
 - Enhanced total counts - Questions 1-3 (complete breakdown)
 
+### Test Case Refactoring Overview
+The current test infrastructure requires comprehensive refactoring to ensure robust coverage of the newly implemented analytics system. Analysis of existing test files reveals several critical issues that impact code quality and maintainability:
+
+**Current Test Coverage Issues:**
+❌ **API Tests (`internal/api/server_test.go`):**
+- Inconsistent test patterns between integration and unit tests
+- Basic MockRPCWrapper with limited edge case coverage
+- Missing tests for new analytics endpoints (Questions 1-15)
+- Incomplete error handling scenarios
+- Limited concurrency testing depth
+- No performance/load testing for analytics endpoints
+
+❌ **Repository Tests (`internal/repository/clickhouse_test.go`):**
+- ~70% of analytics tests are commented out (incomplete)
+- Missing comprehensive coverage for new analytics methods
+- No performance benchmarks for large dataset queries
+- Inconsistent test setup and data generation
+- Missing edge case testing (boundary conditions, invalid data)
+- No integration testing between repository layers
+
+❌ **Test Infrastructure:**
+- Fragmented test utilities and helper functions
+- Inconsistent mock implementations across test files
+- Limited test data generation capabilities
+- No standardized test environments for different scenarios
+- Missing comprehensive test documentation
+
+**Target Test Quality Standards:**
+✅ **Comprehensive Coverage**: All 15 analytics questions thoroughly tested
+✅ **Performance Validation**: Benchmarks for ClickHouse analytics queries
+✅ **Error Resilience**: Complete error scenario coverage
+✅ **Mock Sophistication**: Advanced mocking for isolated unit testing
+✅ **Integration Testing**: End-to-end API and repository validation
+✅ **Documentation**: Clear test organization and maintainability
+
 **Target Questions for Implementation:**
 1. What is the total number of EOA accounts?
 2. What is the total number of contract accounts?
@@ -156,31 +191,74 @@ The system has undergone a significant architectural simplification:
   - Endpoint routing and middleware
   - Simplified error handling for single database backend
 
-### Phase 4: Testing and Validation 🔄 **CURRENT PRIORITY**
+### Phase 4: Comprehensive Test Case Refactoring 🔄 **CURRENT PRIORITY**
 
-**Task A9: Advanced Analytics Testing**
-- **Objective**: Comprehensive testing of new analytics functionality
+**Task T1: Repository Test Infrastructure Overhaul**
+- **Objective**: Establish robust, maintainable test foundation for repository layer
 - **Success Criteria**:
-  - Unit tests for all new analytics methods
-  - Integration tests with ClickHouse
-  - Performance testing with large datasets
-  - API endpoint testing with realistic scenarios
+  - Standardized test setup and teardown procedures
+  - Comprehensive test data generation utilities
+  - Consistent test environment configuration
+  - Proper test isolation and cleanup
 - **Deliverables**:
-  - Updated test suites for repository methods
-  - API endpoint tests with mock data
-  - Performance benchmarks and optimization
+  - Enhanced `test_helpers.go` with standardized utilities
+  - Comprehensive test data generators for all analytics scenarios
+  - Improved database setup/teardown with proper isolation
+  - Documentation for test infrastructure usage
 
-**Task A10: Documentation and Examples**
-- **Objective**: Complete documentation for new analytics system
+**Task T2: Repository Analytics Method Testing**
+- **Objective**: Complete test coverage for all repository analytics methods
 - **Success Criteria**:
-  - API documentation with examples
-  - Analytics data structure documentation
-  - Usage examples and best practices
-  - Performance considerations and recommendations
+  - 100% test coverage for all analytics methods (Questions 1-15)
+  - Edge case testing (empty data, boundary conditions, invalid parameters)
+  - Error handling validation for all failure scenarios
+  - Performance benchmarks for large dataset queries
 - **Deliverables**:
-  - Updated API documentation
-  - Analytics usage examples
-  - Performance tuning guide
+  - Complete test suite for `GetAccountAnalytics`
+  - Complete test suite for `GetStorageAnalytics`
+  - Complete test suite for `GetContractAnalytics`
+  - Complete test suite for `GetBlockActivityAnalytics`
+  - Complete test suite for `GetUnifiedAnalytics`
+  - Performance benchmarks and optimization tests
+
+**Task T3: API Layer Test Enhancement**
+- **Objective**: Comprehensive API endpoint testing with improved mocking
+- **Success Criteria**:
+  - Tests for all new analytics endpoints
+  - Advanced mock implementations for better test isolation
+  - Comprehensive error handling scenarios
+  - Load testing and concurrency validation
+- **Deliverables**:
+  - Enhanced MockRPCWrapper with realistic error scenarios
+  - Complete test coverage for all API endpoints
+  - Advanced concurrency and load testing suite
+  - API response validation and contract testing
+
+**Task T4: Integration and End-to-End Testing**
+- **Objective**: Validate complete system behavior across all layers
+- **Success Criteria**:
+  - End-to-end tests for complete analytics workflows
+  - Integration tests between API and repository layers
+  - Realistic data scenario testing
+  - Performance validation under load
+- **Deliverables**:
+  - Integration test suite covering API → Repository → Database
+  - End-to-end analytics workflow validation
+  - Load testing with realistic data volumes
+  - Performance regression testing framework
+
+**Task T5: Test Organization and Documentation**
+- **Objective**: Improve test maintainability and developer experience
+- **Success Criteria**:
+  - Clear test organization and naming conventions
+  - Comprehensive test documentation
+  - Easy test execution and debugging
+  - Automated test quality validation
+- **Deliverables**:
+  - Reorganized test files with clear categorization
+  - Test execution documentation and guidelines
+  - Test quality metrics and monitoring
+  - Developer testing guidelines and best practices
 
 ## Key Challenges and Analysis
 
@@ -196,6 +274,23 @@ The system has undergone a significant architectural simplification:
 3. **API Design**: Creating intuitive API endpoints that group related analytics appropriately
 4. **Migration Strategy**: Ensuring smooth transition from any existing PostgreSQL deployments
 
+### Test Case Refactoring Challenges
+1. **Legacy Test Debt**: Current tests have significant technical debt with ~70% commented out functionality
+2. **ClickHouse Test Complexity**: Testing columnar database requires different approaches than traditional SQL testing
+3. **Analytics Query Testing**: Complex analytics queries need comprehensive data scenarios and performance validation
+4. **Mock Sophistication**: Current mocks are too basic for comprehensive error scenario testing
+5. **Test Data Generation**: Analytics testing requires realistic, large-scale test datasets for meaningful validation
+6. **Performance Testing**: Analytics queries need benchmarking to ensure performance under load
+7. **Integration Complexity**: End-to-end testing across API → Repository → ClickHouse requires careful coordination
+
+### Test Quality Requirements
+1. **Comprehensive Coverage**: All 15 analytics questions must have complete test coverage
+2. **Performance Validation**: Analytics queries must meet performance requirements under realistic load
+3. **Error Resilience**: All error scenarios (network, database, invalid data) must be thoroughly tested
+4. **Maintainability**: Tests must be easy to understand, modify, and extend for future analytics
+5. **Isolation**: Each test must run independently without side effects
+6. **Documentation**: Test purposes and expected outcomes must be clearly documented
+
 ### Performance Considerations
 1. **ClickHouse Optimization**: Leveraging columnar storage and native aggregation capabilities
 2. **Query Batching**: Combining related analytics queries for efficiency
@@ -204,7 +299,7 @@ The system has undergone a significant architectural simplification:
 
 ## Project Status Board
 
-### Analytics Extension Tasks
+### Analytics Extension Tasks ✅ **COMPLETED**
 - [x] **Task A1**: Analytics Data Structure Design ✅ **COMPLETED**
 - [x] **Task A2**: Repository Interface Simplification ✅ **COMPLETED** 
 - [x] **Task A3**: ClickHouse Single Access Analytics ✅ **COMPLETED**
@@ -213,18 +308,87 @@ The system has undergone a significant architectural simplification:
 - [x] **Task A6**: ClickHouse Storage Volume Analytics ✅ **COMPLETED**
 - [x] **Task A7**: API Endpoint Design ✅ **COMPLETED**
 - [x] **Task A8**: API Endpoint Implementation ✅ **COMPLETED**
-- [ ] **Task A9**: Advanced Analytics Testing 🔄 **CURRENT PRIORITY**
-- [ ] **Task A10**: Documentation and Examples
+
+### Test Case Refactoring Tasks 🔄 **CURRENT PRIORITY**
+
+#### Repository Test Infrastructure (Task T1)
+- [ ] **T1.1**: Standardize repository test setup and teardown procedures
+- [ ] **T1.2**: Create comprehensive test data generation utilities  
+- [ ] **T1.3**: Implement proper test isolation and cleanup mechanisms
+- [ ] **T1.4**: Document test infrastructure usage and patterns
+
+#### Repository Analytics Testing (Task T2)
+- [ ] **T2.1**: Complete test coverage for `GetAccountAnalytics` (Questions 1, 2, 5a)
+- [ ] **T2.2**: Complete test coverage for `GetStorageAnalytics` (Questions 3, 4, 5b)
+- [ ] **T2.3**: Complete test coverage for `GetContractAnalytics` (Questions 7-11, 15)
+- [ ] **T2.4**: Complete test coverage for `GetBlockActivityAnalytics` (Questions 6, 12-14)
+- [ ] **T2.5**: Complete test coverage for `GetUnifiedAnalytics` (All Questions 1-15)
+- [ ] **T2.6**: Implement performance benchmarks for analytics queries
+
+#### API Testing Enhancement (Task T3)
+- [ ] **T3.1**: Enhance MockRPCWrapper with realistic error scenarios
+- [ ] **T3.2**: Create complete test coverage for all analytics endpoints
+- [ ] **T3.3**: Implement advanced concurrency and load testing
+- [ ] **T3.4**: Add API response validation and contract testing
+
+#### Integration Testing (Task T4)
+- [ ] **T4.1**: Build end-to-end analytics workflow validation
+- [ ] **T4.2**: Create integration tests covering API → Repository → Database
+- [ ] **T4.3**: Implement load testing with realistic data volumes
+- [ ] **T4.4**: Establish performance regression testing framework
+
+#### Test Organization (Task T5)
+- [ ] **T5.1**: Reorganize test files with clear categorization
+- [ ] **T5.2**: Create test execution documentation and guidelines
+- [ ] **T5.3**: Implement test quality metrics and monitoring
+- [ ] **T5.4**: Develop testing guidelines and best practices
 
 ### Current Status / Progress Tracking
-- **Current Task**: Task A9 - Advanced Analytics Testing
-- **Progress**: Completed Phases 1-3 (All major implementation tasks complete)
-- **Architecture**: Successfully transitioned to ClickHouse-only implementation
-- **Completed Tasks**: A1, A2, A3, A4, A5, A6, A7, A8 (all implementation complete)
-- **Next Steps**: Implement comprehensive testing for the simplified analytics system
-- **Blockers**: None identified
+- **Current Phase**: Phase 4 - Comprehensive Test Case Refactoring
+- **Priority Task**: T1 - Repository Test Infrastructure Overhaul
+- **Architecture**: ClickHouse-only implementation completed (Phases 1-3)
+- **Completed Tasks**: All analytics implementation tasks (A1-A8) complete, TestClickHouseInsertRange fixed
+- **Next Steps**: Continue systematic test refactoring starting with repository infrastructure
+- **Blockers**: None identified - ready to continue test enhancement
 
 ## Executor's Feedback or Assistance Requests
+
+### TestClickHouseInsertRange Fix - COMPLETED ✅ 
+- **Status**: ✅ **COMPLETED**
+- **Task**: Fix failing TestClickHouseInsertRange test cases
+- **Issues Fixed**:
+  1. **SQL Syntax Errors**: Fixed ClickHouse SQL syntax in analytics queries
+     - Corrected `countMerge()` aggregate function usage in nested queries
+     - Fixed table alias naming conflicts (as -> a_stats, sas -> sa_stats)
+     - Proper INNER JOIN syntax for aggregate function tables
+     - Fixed field name references (storage_slot -> slot_key)
+  2. **Test Data Issues**: Fixed incorrect test data setup in StorageOnly test
+     - Corrected empty storage slot maps to include actual slot keys
+     - Added proper storage slot hex strings to test data
+  3. **Query Structure**: Refactored complex CTEs to avoid aggregate function nesting
+     - Split complex queries into intermediate subqueries
+     - Proper use of GROUP BY for countMerge operations
+- **Result**: All repository tests now pass (9.156s execution time)
+- **Impact**: Repository layer is now fully functional with proper ClickHouse analytics support
+
+### Test Case Refactoring Plan - Comprehensive Analysis (New Request)
+- **Status**: 🔄 **PLANNING COMPLETE - READY FOR EXECUTION**
+- **Request**: Refactor test cases for API and repository methods with comprehensive coverage
+- **Analysis Completed**:
+  - **Current Test Issues Identified**:
+    - API tests have inconsistent patterns and basic mocking
+    - Repository tests have ~70% commented out functionality  
+    - Missing tests for new analytics endpoints (Questions 1-15)
+    - No performance benchmarks for ClickHouse analytics queries
+    - Limited error scenario coverage and edge case testing
+  - **Quality Requirements Defined**:
+    - 100% test coverage for all analytics methods and endpoints
+    - Performance validation for all analytics queries
+    - Comprehensive error scenario testing
+    - Proper test isolation and data generation
+    - Documentation and maintainability improvements
+- **Execution Plan**: 5-phase approach (T1-T5) starting with repository test infrastructure
+- **Success Criteria**: Robust test suite supporting all 15 analytics questions with performance validation
 
 ### PostgreSQL Removal - Architectural Simplification (Completed)
 - **Status**: ✅ **COMPLETED**
@@ -289,3 +453,17 @@ The system has undergone a significant architectural simplification:
 - **API Design**: Specialized endpoints perform better than generic analytics endpoints
 - **Code Simplification**: Removing unused abstraction layers improves maintainability and performance
 - **Testing Strategy**: Single-database testing is significantly more straightforward and reliable
+
+### ClickHouse Query Development Lessons
+- **Aggregate Function Nesting**: ClickHouse doesn't allow aggregate functions inside other aggregate functions directly
+  - Use intermediate subqueries with GROUP BY to compute aggregate functions first
+  - Then apply conditional logic on the aggregated results in outer queries
+- **AggregateFunction Type Handling**: Use `countMerge()` to extract values from AggregateFunction columns
+  - Must include proper GROUP BY clauses when using countMerge
+  - Cannot directly use countMerge inside countIf - need intermediate queries
+- **Schema Alignment**: Ensure query field names match actual database schema
+  - `storage_slot` vs `slot_key` field naming must be consistent
+  - Table aliases must be properly namespaced to avoid conflicts
+- **Test Data Integrity**: Test data structure must match expected schema exactly
+  - Empty maps `{}` vs properly populated storage slot maps
+  - Hex string formatting and address validation requirements

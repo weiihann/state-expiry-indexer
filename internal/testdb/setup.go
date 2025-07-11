@@ -159,6 +159,13 @@ func cleanupClickHouseTestDB(t *testing.T, config internal.Config) {
 	}
 	defer rows.Close()
 
+	tx, err := db.Begin()
+	if err != nil {
+		t.Logf("failed to begin transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
 	for rows.Next() {
 		var dbName, tableName string
 		if err := rows.Scan(&dbName, &tableName); err != nil {
@@ -167,8 +174,12 @@ func cleanupClickHouseTestDB(t *testing.T, config internal.Config) {
 		}
 
 		stmt := fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", dbName, tableName)
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := tx.Exec(stmt); err != nil {
 			t.Logf("failed to drop table %s.%s: %v", dbName, tableName, err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Logf("failed to commit transaction: %v", err)
 	}
 }

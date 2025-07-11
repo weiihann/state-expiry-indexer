@@ -8,12 +8,11 @@ import (
 	"github.com/weiihann/state-expiry-indexer/internal"
 )
 
-// StateRepositoryInterface defines the contract for state repository implementations
+// StateRepositoryInterface defines efficient methods for ClickHouse queries
+// Each method is optimized for specific question categories with minimal database operations
 type StateRepositoryInterface interface {
-	// Range-based processing methods (used by indexer)
+	// Core indexing operations
 	GetLastIndexedRange(ctx context.Context) (uint64, error)
-
-	// Archive mode method for storing all events (used by indexer in archive mode)
 	InsertRange(
 		ctx context.Context,
 		accountAccesses map[uint64]map[string]struct{},
@@ -21,16 +20,54 @@ type StateRepositoryInterface interface {
 		storageAccesses map[uint64]map[string]map[string]struct{},
 		rangeNumber uint64,
 	) error
-
-	// Basic API query methods (used by API server)
 	GetSyncStatus(ctx context.Context, latestRange uint64, rangeSize uint64) (*SyncStatus, error)
 
-	// Extended analytics methods for comprehensive state analysis
-	GetAnalyticsData(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*ExtendedAnalyticsData, error)
-	GetSingleAccessAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64) (*SingleAccessAnalysis, error)
-	GetBlockActivityAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, topN int) (*BlockActivityAnalysis, error)
-	GetTimeSeriesAnalytics(ctx context.Context, startBlock uint64, endBlock uint64, windowSize int) (*TimeSeriesAnalysis, error)
-	GetStorageVolumeAnalytics(ctx context.Context, expiryBlock uint64, currentBlock uint64, topN int) (*StorageVolumeAnalysis, error)
+	// ==============================================================================
+	// OPTIMIZED ANALYTICS METHODS (Questions 1-15)
+	// ==============================================================================
+
+	// Account Analytics (Questions 1, 2, 5a)
+	// Single query using accounts_state and account_access_count_agg tables
+	GetAccountAnalytics(ctx context.Context, params QueryParams) (*AccountAnalytics, error)
+
+	// Storage Analytics (Questions 3, 4, 5b) 
+	// Single query using storage_state and storage_access_count_agg tables
+	GetStorageAnalytics(ctx context.Context, params QueryParams) (*StorageAnalytics, error)
+
+	// Contract Analytics (Questions 7, 8, 9, 10, 11, 15)
+	// Uses contract_storage_count_agg and joins with state tables
+	GetContractAnalytics(ctx context.Context, params QueryParams) (*ContractAnalytics, error)
+
+	// Block Activity Analytics (Questions 6, 12, 13, 14)
+	// Uses block summary tables for efficient time-series queries
+	GetBlockActivityAnalytics(ctx context.Context, params QueryParams) (*BlockActivityAnalytics, error)
+
+	// Unified Analytics (All Questions)
+	// Combines all analytics in a single response with parallel queries
+	GetUnifiedAnalytics(ctx context.Context, params QueryParams) (*UnifiedAnalytics, error)
+
+	// ==============================================================================
+	// SPECIALIZED EFFICIENT QUERIES 
+	// ==============================================================================
+
+	// Get basic statistics in a single query for quick overview
+	GetBasicStats(ctx context.Context, expiryBlock uint64) (*BasicStats, error)
+
+	// Get top N items efficiently with single queries
+	GetTopContractsByExpiredSlots(ctx context.Context, expiryBlock uint64, topN int) ([]ContractRankingItem, error)
+	GetTopContractsByTotalSlots(ctx context.Context, topN int) ([]ContractRankingItem, error)
+	GetTopActivityBlocks(ctx context.Context, startBlock, endBlock uint64, topN int) ([]BlockActivity, error)
+	GetMostFrequentAccounts(ctx context.Context, topN int) ([]FrequentAccount, error)
+	GetMostFrequentStorage(ctx context.Context, topN int) ([]FrequentStorage, error)
+
+	// Time series queries using pre-aggregated data
+	GetTimeSeriesData(ctx context.Context, startBlock, endBlock uint64, windowSize int) ([]TimeSeriesPoint, error)
+	GetAccessRates(ctx context.Context, startBlock, endBlock uint64) (*AccessRateAnalysis, error)
+	GetTrendAnalysis(ctx context.Context, startBlock, endBlock uint64) (*TrendAnalysis, error)
+
+	// Contract-specific queries
+	GetContractExpiryDistribution(ctx context.Context, expiryBlock uint64) ([]ExpiryDistributionBucket, error)
+	GetContractStatusBreakdown(ctx context.Context, expiryBlock uint64) (*ContractStatusAnalysis, error)
 }
 
 // AdvancedAnalyticsError represents errors for unsupported advanced analytics operations

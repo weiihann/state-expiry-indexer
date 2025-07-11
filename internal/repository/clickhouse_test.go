@@ -104,7 +104,7 @@ func TestClickHouseGetLastIndexedRange(t *testing.T) {
 func TestClickHouseInsertRange(t *testing.T) {
 	t.Run("EmptyMaps", func(t *testing.T) {
 		repo, cleanup := setupClickHouseTestRepository(t)
-		defer cleanup()
+		t.Cleanup(cleanup)
 
 		ctx := context.Background()
 		accounts := map[uint64]map[string]struct{}{}
@@ -122,7 +122,7 @@ func TestClickHouseInsertRange(t *testing.T) {
 
 	t.Run("AccountsOnly", func(t *testing.T) {
 		repo, cleanup := setupClickHouseTestRepository(t)
-		defer cleanup()
+		t.Cleanup(cleanup)
 
 		ctx := context.Background()
 		accounts := map[uint64]map[string]struct{}{
@@ -142,9 +142,10 @@ func TestClickHouseInsertRange(t *testing.T) {
 
 		// For ClickHouse, we can verify data was inserted by checking if we can get analytics
 		// (we don't have direct access to GetAccountInfo like PostgreSQL)
-		analytics, err := repo.GetAnalyticsData(ctx, 200, 300) // Expiry after our test data
+		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
+		analytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry after our test data
 		require.NoError(t, err)
-		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts in ClickHouse")
+		assert.Greater(t, analytics.Total.Total, 0, "Should have accounts in ClickHouse")
 	})
 
 	t.Run("StorageOnly", func(t *testing.T) {
@@ -156,8 +157,12 @@ func TestClickHouseInsertRange(t *testing.T) {
 		accountType := map[string]bool{}
 		storage := map[uint64]map[string]map[string]struct{}{
 			0: {
-				"0x1234567890123456789012345678901234567890": {},
-				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {},
+				"0x1234567890123456789012345678901234567890": {
+					"0x0000000000000000000000000000000000000000000000000000000000000001": {},
+				},
+				"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {
+					"0x0000000000000000000000000000000000000000000000000000000000000002": {},
+				},
 			},
 		}
 
@@ -165,9 +170,10 @@ func TestClickHouseInsertRange(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify storage was inserted by checking analytics
-		analytics, err := repo.GetAnalyticsData(ctx, 200, 300)
+		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
+		analytics, err := repo.GetStorageAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage slots in ClickHouse")
+		assert.Greater(t, analytics.Total.TotalSlots, 0, "Should have storage slots in ClickHouse")
 	})
 
 	t.Run("AccountsAndStorage", func(t *testing.T) {
@@ -201,10 +207,14 @@ func TestClickHouseInsertRange(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify both accounts and storage were inserted
-		analytics, err := repo.GetAnalyticsData(ctx, 200, 300)
+		params := QueryParams{ExpiryBlock: 200, CurrentBlock: 300}
+		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params)
 		require.NoError(t, err)
-		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts")
-		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage slots")
+		assert.Greater(t, accountAnalytics.Total.Total, 0, "Should have accounts")
+
+		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		assert.Greater(t, storageAnalytics.Total.TotalSlots, 0, "Should have storage slots")
 
 		// Verify metadata was updated
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -243,10 +253,14 @@ func TestClickHouseInsertRange(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify the data was inserted
-		analytics, err := repo.GetAnalyticsData(ctx, 1200, 1300) // Expiry after our test data
+		params := QueryParams{ExpiryBlock: 1200, CurrentBlock: 1300}
+		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry after our test data
 		require.NoError(t, err)
-		assert.Greater(t, analytics.AccountExpiry.TotalAccounts, 0, "Should have accounts")
-		assert.Greater(t, analytics.StorageSlotExpiry.TotalSlots, 0, "Should have storage")
+		assert.Greater(t, accountAnalytics.Total.Total, 0, "Should have accounts")
+
+		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		assert.Greater(t, storageAnalytics.Total.TotalSlots, 0, "Should have storage")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -313,10 +327,14 @@ func TestClickHouseInsertRange(t *testing.T) {
 
 		// For ClickHouse archive mode, ALL events should be stored
 		// We can verify by checking that analytics shows we have data
-		analytics, err := repo.GetAnalyticsData(ctx, 1100, 1200) // Expiry after some of our test data
+		params := QueryParams{ExpiryBlock: 1100, CurrentBlock: 1200}
+		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry after some of our test data
 		require.NoError(t, err)
-		assert.Equal(t, analytics.AccountExpiry.TotalAccounts, 2, "Should have accounts from all events")
-		assert.Equal(t, analytics.StorageSlotExpiry.TotalSlots, 2, "Should have storage from all events")
+		assert.Equal(t, accountAnalytics.Total.Total, 2, "Should have accounts from all events")
+
+		storageAnalytics, err := repo.GetStorageAnalytics(ctx, params)
+		require.NoError(t, err)
+		assert.Equal(t, storageAnalytics.Total.TotalSlots, 2, "Should have storage from all events")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
@@ -354,9 +372,10 @@ func TestClickHouseInsertRange(t *testing.T) {
 
 		// In archive mode, ClickHouse should store all 3 access events for the same account
 		// This is different from PostgreSQL which only stores the latest access
-		analytics, err := repo.GetAnalyticsData(ctx, 1150, 1300) // Expiry between blocks 2 and 3
+		params := QueryParams{ExpiryBlock: 1150, CurrentBlock: 1300}
+		accountAnalytics, err := repo.GetAccountAnalytics(ctx, params) // Expiry between blocks 2 and 3
 		require.NoError(t, err)
-		assert.Equal(t, analytics.AccountExpiry.TotalAccounts, 1, "Should have account data")
+		assert.Equal(t, accountAnalytics.Total.Total, 1, "Should have account data")
 
 		// Verify metadata
 		lastRange, err := repo.GetLastIndexedRange(ctx)
