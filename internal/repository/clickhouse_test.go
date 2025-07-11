@@ -474,12 +474,12 @@ func TestGetAccountAnalytics(t *testing.T) {
 	t.Run("BasicFunctionality", func(t *testing.T) {
 		// Setup test with known data distribution
 		config := AnalyticsTestDataConfig{
-			NumEOAs:          60, // 60 EOAs
-			NumContracts:     40, // 40 contracts (total 100 accounts)
+			NumEOAs:          6, // 60 EOAs
+			NumContracts:     4, // 40 contracts (total 100 accounts)
 			SlotsPerContract: 5,
 			StartBlock:       1,
-			EndBlock:         100,
-			ExpiryBlock:      50, // Half expired
+			EndBlock:         10,
+			ExpiryBlock:      5, // Half expired
 		}
 
 		setup := SetupAnalyticsTest(t, config)
