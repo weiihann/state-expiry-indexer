@@ -537,16 +537,24 @@ func (r *ClickHouseRepository) GetContractAnalytics(ctx context.Context, params 
 func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params QueryParams) (ContractRankings, error) {
 	// Get top contracts by expired slots
 	topExpiredQuery := `
+	WITH 
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
 	SELECT 
 		lower(hex(s.address)) as address,
 		COUNT(*) as total_slots,
-		countIf(s.last_access_block <= ?) as expired_slots,
-		countIf(s.last_access_block > ?) as active_slots,
-		(countIf(s.last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage,
-		max(s.last_access_block) as last_access,
-		any(a.last_access_block > ?) as is_account_active
-	FROM storage_state s
-	LEFT JOIN accounts_state a ON s.address = a.address
+		countIf(s.max_access_block < ?) as expired_slots,
+		countIf(s.max_access_block >= ?) as active_slots,
+		(countIf(s.max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
+		s.max_access_block as last_access,
+		any(a.max_access_block >= ?) as is_account_active
+	FROM collapsed_storage s
 	GROUP BY s.address
 	HAVING expired_slots > 0
 	ORDER BY expired_slots DESC, expiry_percentage DESC
@@ -575,16 +583,24 @@ func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params Q
 
 	// Get top contracts by total slots
 	topTotalQuery := `
+	WITH 
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
 	SELECT 
 		lower(hex(s.address)) as address,
 		COUNT(*) as total_slots,
-		countIf(s.last_access_block <= ?) as expired_slots,
-		countIf(s.last_access_block > ?) as active_slots,
-		(countIf(s.last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage,
-		max(s.last_access_block) as last_access,
-		any(a.last_access_block > ?) as is_account_active
-	FROM storage_state s
-	LEFT JOIN accounts_state a ON s.address = a.address
+		countIf(s.max_access_block < ?) as expired_slots,
+		countIf(s.max_access_block >= ?) as active_slots,
+		(countIf(s.max_access_block < ?) / COUNT(*) * 100) as expiry_percentage,
+		s.max_access_block as last_access,
+		any(a.max_access_block >= ?) as is_account_active
+	FROM collapsed_storage s
 	GROUP BY s.address
 	ORDER BY total_slots DESC
 	LIMIT ?
@@ -619,11 +635,20 @@ func (r *ClickHouseRepository) getContractRankings(ctx context.Context, params Q
 // getContractExpiryAnalysis gets contract expiry distribution analysis
 func (r *ClickHouseRepository) getContractExpiryAnalysis(ctx context.Context, params QueryParams) (ContractExpiryAnalysis, error) {
 	query := `
-	WITH contract_expiry_stats AS (
+	WITH
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
+	contract_expiry_stats AS (
 		SELECT 
 			address,
-			(countIf(last_access_block <= ?) / COUNT(*) * 100) as expiry_percentage
-		FROM storage_state
+			(countIf(max_access_block < ?) / COUNT(*) * 100) as expiry_percentage
+		FROM collapsed_storage
 		GROUP BY address
 		HAVING COUNT(*) > 0
 	)
@@ -720,11 +745,20 @@ func (r *ClickHouseRepository) getExpiryDistributionBuckets(ctx context.Context,
 // getContractVolumeAnalysis gets contract volume analysis
 func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, params QueryParams) (ContractVolumeAnalysis, error) {
 	query := `
+	WITH 
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
 	WITH contract_storage_counts AS (
 		SELECT 
 			address,
 			COUNT(*) as slot_count
-		FROM storage_state
+		FROM collapsed_storage
 		GROUP BY address
 	)
 	SELECT 
@@ -758,14 +792,22 @@ func (r *ClickHouseRepository) getContractVolumeAnalysis(ctx context.Context, pa
 // getContractStatusAnalysis gets contract status analysis
 func (r *ClickHouseRepository) getContractStatusAnalysis(ctx context.Context, params QueryParams) (ContractStatusAnalysis, error) {
 	query := `
+	WITH 
+	collapsed_storage AS (
+		SELECT
+			address,
+			slot_key,
+			max(last_access_block) as max_access_block
+		FROM storage_state
+		GROUP BY address, slot_key
+	),
 	WITH contract_status AS (
 		SELECT 
 			s.address,
 			COUNT(*) as total_slots,
-			countIf(s.last_access_block <= ?) as expired_slots,
-			any(a.last_access_block > ?) as account_active
-		FROM storage_state s
-		LEFT JOIN accounts_state a ON s.address = a.address
+			countIf(s.max_access_block < ?) as expired_slots,
+			any(a.max_access_block >= ?) as account_active
+		FROM collapsed_storage s
 		GROUP BY s.address
 	)
 	SELECT 
