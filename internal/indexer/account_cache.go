@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	accountCacheSize = 15 * 1024 * 1024 * 1024 // 15GB
+	accountCacheSize = 5 * 1024 * 1024 * 1024 // 15GB
 )
 
 type AccountCache struct {
