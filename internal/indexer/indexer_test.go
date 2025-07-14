@@ -517,11 +517,13 @@ func TestIndexerServiceAccountTypeDetection(t *testing.T) {
 		ctx := context.Background()
 
 		// Test account type detection for contract
-		isContract := service.indexer.determineAccountType(ctx, contractAddress, 100, rpc.AccountDiff{})
+		isContract, err := service.indexer.determineAccountType(ctx, contractAddress, 100, rpc.AccountDiff{})
+		assert.NoError(t, err, "Should not return error")
 		assert.True(t, isContract, "Should detect contract account")
 
 		// Test account type detection for EOA
-		isEOA := service.indexer.determineAccountType(ctx, eoaAddress, 100, rpc.AccountDiff{})
+		isEOA, err := service.indexer.determineAccountType(ctx, eoaAddress, 100, rpc.AccountDiff{})
+		assert.NoError(t, err, "Should not return error")
 		assert.False(t, isEOA, "Should detect EOA account")
 
 		// Verify RPC calls were made
