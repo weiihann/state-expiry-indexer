@@ -218,24 +218,13 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 
 // determineAccountType analyzes the account diff to determine if it's a contract
 func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff rpc.AccountDiff) bool {
+	if diff.IsContract {
+		i.accountCache.Set(addr, true)
+		return true
+	}
+
 	if isContract, ok := i.accountCache.Get(addr); ok {
 		return isContract
-	}
-
-	// If the account has code changes, it's definitely a contract
-	if diff.Code != nil {
-		if _, ok := diff.Code.(map[string]any); ok {
-			i.accountCache.Set(addr, true)
-			return true
-		}
-	}
-
-	// If the account has storage changes, it's definitely a contract
-	if diff.Storage != nil {
-		if st, ok := diff.Storage.(map[string]any); ok && len(st) > 0 {
-			i.accountCache.Set(addr, true)
-			return true
-		}
 	}
 
 	// If both cache misses and diff miss, check via RPC

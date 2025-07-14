@@ -459,6 +459,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				Storage:        map[string]map[string]DiffItem{},
 				AccountChanged: true,
 				StorageChanged: false,
+				IsContract:     false,
 			},
 		},
 		{
@@ -486,6 +487,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				Storage:        map[string]map[string]DiffItem{},
 				AccountChanged: true,
 				StorageChanged: false,
+				IsContract:     false,
 			},
 		},
 		{
@@ -517,6 +519,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				},
 				AccountChanged: true,
 				StorageChanged: true,
+				IsContract:     true,
 			},
 		},
 		{
@@ -534,6 +537,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				Storage:        map[string]map[string]DiffItem{},
 				AccountChanged: false,
 				StorageChanged: false,
+				IsContract:     false,
 			},
 		},
 		{
@@ -556,6 +560,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				Storage:        map[string]map[string]DiffItem{},
 				AccountChanged: true,
 				StorageChanged: false,
+				IsContract:     true,
 			},
 		},
 		{
@@ -573,6 +578,7 @@ func TestAccountDiff_UnmarshalJSON(t *testing.T) {
 				Storage:        map[string]map[string]DiffItem{},
 				AccountChanged: false,
 				StorageChanged: false,
+				IsContract:     false,
 			},
 		},
 	}

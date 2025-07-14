@@ -69,6 +69,7 @@ type AccountDiff struct {
 	Storage        any  `json:"storage,omitempty"`
 	AccountChanged bool `json:"-"`
 	StorageChanged bool `json:"-"`
+	IsContract     bool `json:"-"`
 }
 
 // UnmarshalJSON custom unmarshaller for AccountDiff to set change flags
@@ -106,6 +107,7 @@ func (ad *AccountDiff) UnmarshalJSON(data []byte) error {
 	if code, ok := raw["code"]; ok {
 		if processField(code, &ad.Code) {
 			ad.AccountChanged = true
+			ad.IsContract = true
 		}
 	}
 
@@ -124,6 +126,7 @@ func (ad *AccountDiff) UnmarshalJSON(data []byte) error {
 			if len(m) > 0 {
 				ad.StorageChanged = true
 				ad.AccountChanged = true
+				ad.IsContract = true
 			}
 		} else {
 			// If not map, set to raw
