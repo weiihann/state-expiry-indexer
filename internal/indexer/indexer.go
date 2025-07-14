@@ -191,9 +191,12 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 
 	for _, txResult := range stateDiffs {
 		for addr, diff := range txResult.StateDiff {
-			isContract := i.determineAccountType(ctx, addr, blockNumber, diff)
+			isContract, err := i.determineAccountType(ctx, addr, blockNumber, diff)
+			if err != nil {
+				return fmt.Errorf("could not determine account type for %s in block %d: %w", addr, blockNumber, err)
+			}
 
-			err := sa.AddAccount(addr, blockNumber, isContract)
+			err = sa.AddAccount(addr, blockNumber, isContract)
 			if err != nil {
 				return fmt.Errorf("could not process account %s in block %d: %w", addr, blockNumber, err)
 			}
@@ -217,28 +220,28 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 }
 
 // determineAccountType analyzes the account diff to determine if it's a contract
-func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff rpc.AccountDiff) bool {
+func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff rpc.AccountDiff) (bool, error) {
 	if diff.IsContract {
 		i.accountCache.Set(addr, true)
-		return true
+		return true, nil
 	}
 
 	if isContract, ok := i.accountCache.Get(addr); ok {
-		return isContract
+		return isContract, nil
 	}
 
 	// If both cache misses and diff miss, check via RPC
 	code, err := i.rpcClient.GetCode(ctx, addr, big.NewInt(int64(blockNumber)))
 	if err != nil {
-		return false
+		return false, err
 	}
 	if len(code) > 2 { // Omit the 0x prefix
 		i.accountCache.Set(addr, true)
-		return true
+		return true, nil
 	}
 
 	i.accountCache.Set(addr, false)
-	return false
+	return false, nil
 }
 
 // RunProcessor starts the indexer processor workflow that processes available ranges
