@@ -181,7 +181,7 @@ func (i *Indexer) ProcessRangeDebug(ctx context.Context, rangeNumber uint64) err
 }
 
 // processBlockDiff processes a single block's state diff data and returns the processed data
-func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeDiffs, sa StateAccess) error {
+func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.ReadRangeDiffs, sa StateAccess) error {
 	blockNumber := rangeDiff.BlockNum
 	stateDiffs := rangeDiff.Diffs
 
@@ -202,11 +202,8 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 			}
 
 			if diff.Storage != nil {
-				storageMap, ok := diff.Storage.(map[string]any)
-				if ok {
-					for slot := range storageMap {
-						sa.AddStorage(addr, slot, blockNumber)
-					}
+				for _, slot := range diff.Storage {
+					sa.AddStorage(addr, slot, blockNumber)
 				}
 			}
 		}
@@ -220,7 +217,7 @@ func (i *Indexer) processBlockDiff(ctx context.Context, rangeDiff storage.RangeD
 }
 
 // determineAccountType analyzes the account diff to determine if it's a contract
-func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff rpc.AccountDiff) (bool, error) {
+func (i *Indexer) determineAccountType(ctx context.Context, addr string, blockNumber uint64, diff storage.Diff) (bool, error) {
 	if diff.IsContract {
 		i.accountCache.Set(addr, true)
 		return true, nil

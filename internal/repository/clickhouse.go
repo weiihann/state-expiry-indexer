@@ -1411,6 +1411,7 @@ func (r *ClickHouseRepository) GetTimeSeriesData(ctx context.Context, startBlock
 	log := logger.GetLogger("clickhouse-repo")
 
 	// Use the optimized combined_block_summary table for better performance
+	// TODO: fix this using accounts_block_summary and storage_block_summary
 	query := `
 	SELECT 
 		intDiv(block_number, ?) * ? as window_start,
@@ -1454,6 +1455,7 @@ func (r *ClickHouseRepository) GetAccessRates(ctx context.Context, startBlock, e
 	log := logger.GetLogger("clickhouse-repo")
 
 	// Use the optimized combined_block_summary table for better performance
+	// TODO: fix this using accounts_block_summary and storage_block_summary
 	query := `
 	SELECT 
 		avg(account_access_count) as avg_accounts_per_block,
@@ -1491,6 +1493,7 @@ func (r *ClickHouseRepository) GetTrendAnalysis(ctx context.Context, startBlock,
 	log := logger.GetLogger("clickhouse-repo")
 
 	// Use the optimized combined_block_summary table for better performance
+	// TODO: fix this using accounts_block_summary and storage_block_summary
 	query := `
 	WITH block_activity AS (
 		SELECT 
