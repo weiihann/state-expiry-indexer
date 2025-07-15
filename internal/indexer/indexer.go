@@ -263,8 +263,6 @@ func (s *Service) RunProcessor(ctx context.Context) error {
 			s.log.Warn("Processing cycle failed, retrying...",
 				"error", err,
 				"retry_interval", pollInterval)
-			time.Sleep(pollInterval)
-			continue
 		}
 
 		select {
