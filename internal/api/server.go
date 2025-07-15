@@ -45,30 +45,30 @@ func (s *Server) Run(ctx context.Context, host string, port int) error {
 
 		// Optimized analytics endpoints grouped by question categories
 		r.Route("/accounts", func(r chi.Router) {
-			r.Get("/", s.handleGetAccountAnalytics)        // Questions 1, 2, 5a
+			r.Get("/", s.handleGetAccountAnalytics) // Questions 1, 2, 5a
 		})
 
 		r.Route("/storage", func(r chi.Router) {
-			r.Get("/", s.handleGetStorageAnalytics)         // Questions 3, 4, 5b
+			r.Get("/", s.handleGetStorageAnalytics) // Questions 3, 4, 5b
 		})
 
 		r.Route("/contracts", func(r chi.Router) {
-			r.Get("/", s.handleGetContractAnalytics)        // Questions 7, 8, 9, 10, 11, 15
-			r.Get("/top-expired", s.handleGetTopExpiredContracts)    // Question 7
-			r.Get("/top-volume", s.handleGetTopVolumeContracts)      // Question 15
+			r.Get("/", s.handleGetContractAnalytics)              // Questions 7, 8, 9, 10, 11, 15
+			r.Get("/top-expired", s.handleGetTopExpiredContracts) // Question 7
+			r.Get("/top-volume", s.handleGetTopVolumeContracts)   // Question 15
 		})
 
 		r.Route("/activity", func(r chi.Router) {
-			r.Get("/", s.handleGetBlockActivityAnalytics)   // Questions 6, 12, 13, 14
-			r.Get("/blocks", s.handleGetTopActivityBlocks)  // Question 6
-			r.Get("/trends", s.handleGetTrendAnalysis)      // Questions 12, 14
+			r.Get("/", s.handleGetBlockActivityAnalytics)  // Questions 6, 12, 13, 14
+			r.Get("/blocks", s.handleGetTopActivityBlocks) // Question 6
+			r.Get("/trends", s.handleGetTrendAnalysis)     // Questions 12, 14
 		})
 
 		// Unified endpoint returning all analytics
-		r.Get("/stats", s.handleGetUnifiedAnalytics)       // All Questions 1-15
+		r.Get("/stats", s.handleGetUnifiedAnalytics) // All Questions 1-15
 
 		// Quick overview endpoint
-		r.Get("/overview", s.handleGetBasicStats)          // Basic statistics
+		r.Get("/overview", s.handleGetBasicStats) // Basic statistics
 
 		// Legacy endpoints (for backward compatibility)
 		r.Route("/analytics", func(r chi.Router) {
@@ -714,8 +714,8 @@ func (s *Server) handleGetTopExpiredContracts(w http.ResponseWriter, r *http.Req
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"top_expired_contracts": contracts,
-		"expiry_block":         expiryBlock,
-		"limit":               topN,
+		"expiry_block":          expiryBlock,
+		"limit":                 topN,
 	})
 }
 
@@ -744,7 +744,7 @@ func (s *Server) handleGetTopVolumeContracts(w http.ResponseWriter, r *http.Requ
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"top_volume_contracts": contracts,
-		"limit":               topN,
+		"limit":                topN,
 	})
 }
 
@@ -791,9 +791,9 @@ func (s *Server) handleGetTopActivityBlocks(w http.ResponseWriter, r *http.Reque
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"top_activity_blocks": blocks,
-		"start_block":        startBlock,
-		"end_block":          endBlock,
-		"limit":             topN,
+		"start_block":         startBlock,
+		"end_block":           endBlock,
+		"limit":               topN,
 	})
 }
 
@@ -831,7 +831,7 @@ func (s *Server) handleGetTrendAnalysis(w http.ResponseWriter, r *http.Request) 
 		"remote_addr", r.RemoteAddr)
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"trend_analysis": trend,
-		"start_block":   startBlock,
-		"end_block":     endBlock,
+		"start_block":    startBlock,
+		"end_block":      endBlock,
 	})
 }

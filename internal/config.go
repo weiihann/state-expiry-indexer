@@ -29,6 +29,10 @@ type Config struct {
 	APIPort int    `mapstructure:"API_PORT"`
 	APIHost string `mapstructure:"API_HOST"`
 
+	// Prometheus metrics server configuration
+	PrometheusHost string `mapstructure:"PROMETHEUS_HOST"`
+	PrometheusPort int    `mapstructure:"PROMETHEUS_PORT"`
+
 	// File storage configuration
 	DataDir string `mapstructure:"DATA_DIR"`
 
@@ -138,6 +142,10 @@ func setDefaults() {
 	viper.SetDefault("API_PORT", 8080)
 	viper.SetDefault("API_HOST", "localhost")
 
+	// Prometheus metrics server defaults
+	viper.SetDefault("PROMETHEUS_HOST", "localhost")
+	viper.SetDefault("PROMETHEUS_PORT", 9000)
+
 	// File storage defaults
 	viper.SetDefault("DATA_DIR", "data")
 	viper.SetDefault("STATE_DIFF_DIR", "data/statediffs")
@@ -211,6 +219,19 @@ func validateConfig(config Config) error {
 		errors = append(errors, ValidationError{
 			Field:   "API_PORT",
 			Message: "API port must be a valid port number (1-65535)",
+		})
+	}
+
+	if config.PrometheusHost == "" {
+		errors = append(errors, ValidationError{
+			Field:   "PROMETHEUS_HOST",
+			Message: "Prometheus host is required",
+		})
+	}
+	if config.PrometheusPort == 0 {
+		errors = append(errors, ValidationError{
+			Field:   "PROMETHEUS_PORT",
+			Message: "Prometheus port is required",
 		})
 	}
 

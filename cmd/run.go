@@ -3,11 +3,14 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/weiihann/state-expiry-indexer/internal"
 	"github.com/weiihann/state-expiry-indexer/internal/api"
@@ -145,6 +148,21 @@ func run(cmd *cobra.Command, args []string) {
 		log.Info("Range-based indexer processor workflow stopped")
 	}()
 
+	// Start Prometheus metrics server in a separate goroutine
+	wg.Add(1)
+	metricsServer := &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", config.PrometheusHost, config.PrometheusPort),
+		Handler: http.NewServeMux(),
+	}
+	metricsServer.Handler.(*http.ServeMux).Handle("/metrics", promhttp.Handler())
+	go func() {
+		defer wg.Done()
+		log.Info("Starting Prometheus metrics server...", "host", config.PrometheusHost, "port", config.PrometheusPort)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error("Prometheus metrics server error", "error", err, "host", config.PrometheusHost, "port", config.PrometheusPort)
+		}
+	}()
+
 	log.Info("All services started successfully",
 		"api_port", config.APIPort,
 		"api_url", fmt.Sprintf("http://%s:%d", config.APIHost, config.APIPort),
@@ -160,6 +178,16 @@ func run(cmd *cobra.Command, args []string) {
 	<-sigChan
 	log.Info("Received shutdown signal, stopping all services...")
 	cancel()
+	// Gracefully shutdown metrics server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("Prometheus metrics server shutdown error", "error", err)
+		} else {
+			log.Info("Prometheus metrics server stopped gracefully")
+		}
+	}
 
 	// Wait for all goroutines to complete
 	wg.Wait()
