@@ -15,6 +15,7 @@ import (
 	"github.com/weiihann/state-expiry-indexer/internal/repository"
 	"github.com/weiihann/state-expiry-indexer/internal/testdb"
 	"github.com/weiihann/state-expiry-indexer/pkg/rpc"
+	"github.com/weiihann/state-expiry-indexer/pkg/storage"
 )
 
 // MockRPCClient provides a mock implementation of RPC client for testing
@@ -517,12 +518,12 @@ func TestIndexerServiceAccountTypeDetection(t *testing.T) {
 		ctx := context.Background()
 
 		// Test account type detection for contract
-		isContract, err := service.indexer.determineAccountType(ctx, contractAddress, 100, rpc.AccountDiff{})
+		isContract, err := service.indexer.determineAccountType(ctx, contractAddress, 100, storage.Diff{})
 		assert.NoError(t, err, "Should not return error")
 		assert.True(t, isContract, "Should detect contract account")
 
 		// Test account type detection for EOA
-		isEOA, err := service.indexer.determineAccountType(ctx, eoaAddress, 100, rpc.AccountDiff{})
+		isEOA, err := service.indexer.determineAccountType(ctx, eoaAddress, 100, storage.Diff{})
 		assert.NoError(t, err, "Should not return error")
 		assert.False(t, isEOA, "Should detect EOA account")
 

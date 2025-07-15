@@ -12,6 +12,12 @@ import (
 	"github.com/weiihann/state-expiry-indexer/pkg/utils"
 )
 
+// RangeDiffs represents a block range with its state diffs
+type RangeDiffs struct {
+	BlockNum uint64                  `json:"blockNum"`
+	Diffs    []rpc.TransactionResult `json:"diffs"`
+}
+
 // RangeProcessor handles downloading and processing of block ranges
 type RangeProcessor struct {
 	dataDir   string
@@ -127,10 +133,8 @@ func (rp *RangeProcessor) DownloadRange(ctx context.Context, rangeNumber uint64)
 		}
 
 		// Convert to the expected format
-		var transactionResults []*rpc.TransactionResult
-		for i := range stateDiff {
-			transactionResults = append(transactionResults, &stateDiff[i])
-		}
+		var transactionResults []rpc.TransactionResult
+		transactionResults = append(transactionResults, stateDiff...)
 
 		// Add to range data
 		rangeDiffs = append(rangeDiffs, RangeDiffs{
@@ -160,7 +164,7 @@ func (rp *RangeProcessor) DownloadRange(ctx context.Context, rangeNumber uint64)
 }
 
 // ReadRange reads and decompresses a range file
-func (rp *RangeProcessor) ReadRange(rangeNumber uint64) ([]RangeDiffs, error) {
+func (rp *RangeProcessor) ReadRange(rangeNumber uint64) ([]ReadRangeDiffs, error) {
 	if rangeNumber == 0 {
 		return nil, fmt.Errorf("cannot read genesis as range, use genesis processing instead")
 	}
@@ -179,10 +183,10 @@ func (rp *RangeProcessor) ReadRange(rangeNumber uint64) ([]RangeDiffs, error) {
 		return nil, fmt.Errorf("failed to decompress range file %s: %w", rangeFilePath, err)
 	}
 
-	// Unmarshal JSON data
-	var rangeDiffs []RangeDiffs
+	// Unmarshal JSON data with better error handling
+	var rangeDiffs []ReadRangeDiffs
 	if err := json.Unmarshal(decompressedData, &rangeDiffs); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal range file %s: %w", rangeFilePath, err)
+		return nil, err
 	}
 
 	return rangeDiffs, nil

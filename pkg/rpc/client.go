@@ -2,11 +2,12 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
+	"log/slog"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/weiihann/state-expiry-indexer/internal/logger"
 )
 
 // ClientInterface defines the interface for RPC client operations
@@ -17,18 +18,20 @@ type ClientInterface interface {
 }
 
 type Client struct {
-	eth *rpc.Client
+	eth    *rpc.Client
+	logger *slog.Logger
 }
 
 // Ensure Client implements ClientInterface
 var _ ClientInterface = (*Client)(nil)
 
 func NewClient(ctx context.Context, url string) (*Client, error) {
+	logger := logger.GetLogger("rpc-client")
 	eth, err := rpc.DialContext(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{eth: eth}, nil
+	return &Client{eth: eth, logger: logger}, nil
 }
 
 func (c *Client) GetLatestBlockNumber(ctx context.Context) (*big.Int, error) {
@@ -63,78 +66,10 @@ type DiffItem struct {
 
 // AccountDiff represents the changes to a single account
 type AccountDiff struct {
-	Balance        any  `json:"balance,omitempty"`
-	Code           any  `json:"code,omitempty"`
-	Nonce          any  `json:"nonce,omitempty"`
-	Storage        any  `json:"storage,omitempty"`
-	AccountChanged bool `json:"-"`
-	StorageChanged bool `json:"-"`
-	IsContract     bool `json:"-"`
-}
-
-// UnmarshalJSON custom unmarshaller for AccountDiff to set change flags
-func (ad *AccountDiff) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	// Helper function to process balance/code/nonce
-	processField := func(field json.RawMessage, target *any) bool {
-		var s string
-		if json.Unmarshal(field, &s) == nil && s == "=" {
-			*target = s
-			return false
-		}
-		var m map[string]DiffItem
-		if json.Unmarshal(field, &m) == nil {
-			*target = m
-			return true
-		}
-		// If neither, set to raw message
-		*target = field
-		return false
-	}
-
-	// Process balance
-	if bal, ok := raw["balance"]; ok {
-		if processField(bal, &ad.Balance) {
-			ad.AccountChanged = true
-		}
-	}
-
-	// Process code
-	if code, ok := raw["code"]; ok {
-		if processField(code, &ad.Code) {
-			ad.AccountChanged = true
-			ad.IsContract = true
-		}
-	}
-
-	// Process nonce
-	if nonce, ok := raw["nonce"]; ok {
-		if processField(nonce, &ad.Nonce) {
-			ad.AccountChanged = true
-		}
-	}
-
-	// Process storage
-	if stor, ok := raw["storage"]; ok {
-		var m map[string]map[string]DiffItem
-		if json.Unmarshal(stor, &m) == nil {
-			ad.Storage = m
-			if len(m) > 0 {
-				ad.StorageChanged = true
-				ad.AccountChanged = true
-				ad.IsContract = true
-			}
-		} else {
-			// If not map, set to raw
-			ad.Storage = stor
-		}
-	}
-
-	return nil
+	Balance any `json:"balance,omitempty"`
+	Code    any `json:"code,omitempty"`
+	Nonce   any `json:"nonce,omitempty"`
+	Storage any `json:"storage,omitempty"`
 }
 
 // StateDiff represents the state diff for a single transaction
