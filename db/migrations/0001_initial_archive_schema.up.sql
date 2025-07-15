@@ -168,32 +168,6 @@ FROM storage_archive
 GROUP BY block_number;
 
 
-CREATE TABLE combined_block_summary (
-    block_number           UInt64,
-    account_access_count   UInt64,
-    storage_access_count   UInt64
-) ENGINE = SummingMergeTree()
-ORDER BY (block_number);
-
-CREATE MATERIALIZED VIEW mv_combined_block_summary_accounts
-TO combined_block_summary AS
-SELECT
-    block_number,
-    count() AS account_access_count,
-    0      AS storage_access_count
-FROM accounts_archive
-GROUP BY block_number;
-
-CREATE MATERIALIZED VIEW mv_combined_block_summary_storage
-TO combined_block_summary AS
-SELECT
-    block_number,
-    0      AS account_access_count,
-    count() AS storage_access_count
-FROM storage_archive
-GROUP BY block_number;
-
-
 -- 5. Contract-Level Storage Slot Counts (for top-10 & per-contract stats)
 
 CREATE TABLE contract_storage_count_agg (
