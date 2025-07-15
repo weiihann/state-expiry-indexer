@@ -673,3 +673,65 @@ The system has undergone a significant architectural simplification:
 - **Test Data Integrity**: Test data structure must match expected schema exactly
   - Empty maps `{}` vs properly populated storage slot maps
   - Hex string formatting and address validation requirements
+
+---
+
+# Prometheus Integration Planning
+
+## Background and Motivation
+Prometheus is a leading open-source monitoring and alerting toolkit. Integrating Prometheus into the State Expiry Indexer will provide real-time visibility into application health, performance, and usage patterns. This enables proactive alerting, capacity planning, and easier debugging of production issues.
+
+## Key Challenges and Analysis
+- **Metrics Endpoint Placement:** Decide whether to add a new HTTP server or integrate with the existing API server (likely `internal/api/server.go`).
+- **Metrics Selection:** Identify which metrics are most valuable (e.g., HTTP request counts, latencies, error rates, database query stats, custom business logic events).
+- **Dependency Management:** Add and manage the Prometheus Go client library (`github.com/prometheus/client_golang/prometheus`).
+- **Performance Impact:** Ensure metrics collection is lightweight and thread-safe.
+- **Testing:** Verify that metrics are exposed and updated as expected.
+
+## High-level Task Breakdown
+
+- **Task P1: Add Prometheus Client Dependency**
+  - Add `github.com/prometheus/client_golang/prometheus` and `github.com/prometheus/client_golang/prometheus/promhttp` to `go.mod`.
+  - *Success Criteria:* Prometheus libraries are available in the project.
+
+- **Task P2: Add Prometheus host/port to config**
+  - Add `metrics_host` and `metrics_port` configuration options to the application's config file.
+  - *Success Criteria:* Configuration system successfully loads these values.
+
+- **Task P3: Implement separate metrics HTTP server**
+  - Create a new HTTP server that listens on the configured host and port.
+  - *Success Criteria:* The metrics server starts and listens on the specified port.
+
+- **Task P4: Graceful shutdown for metrics server**
+  - Implement a graceful shutdown mechanism for the metrics server.
+  - *Success Criteria:* The application exits cleanly when the metrics server is stopped.
+
+- **Task P5: Instrument key application logic**
+  - Add counters, histograms, or gauges to important code paths (e.g., API handlers, DB queries).
+  - *Success Criteria:* At least one custom metric is exposed and updates as the application runs.
+
+- **Task P6: Add example metric (HTTP Request Count)**
+  - Implement a simple counter for HTTP requests as a demonstration.
+  - *Success Criteria:* The metric appears in `/metrics` and increments with each request.
+
+- **Task P7: Add or update tests for metrics**
+  - Write or update tests to verify `/metrics` endpoint and metric updates.
+  - *Success Criteria:* Tests pass and verify metrics exposure.
+
+## Project Status Board: Prometheus Integration
+
+- [x] Task P1: Add Prometheus client dependency
+- [x] Task P2: Add Prometheus host/port to config
+- [x] Task P3: Implement separate metrics HTTP server
+- [x] Task P4: Graceful shutdown for metrics server
+- [ ] Task P5: Instrument key application logic with metrics
+- [ ] Task P6: Add example metric (HTTP request count)
+- [ ] Task P7: Add or update tests for metrics endpoint
+
+## Executor's Feedback or Assistance Requests
+
+- Task P1 complete: Prometheus dependencies (`prometheus` and `promhttp`) have been added to the Go module. Ready to proceed to Task P2.
+- Task P2 complete: Prometheus host/port config fields and example config added. Ready to proceed to Task P3.
+- Task P3 complete: Separate Prometheus metrics server implemented, listening on its own host/port from config.
+- Task P4 complete: Metrics server is gracefully shut down with the rest of the application.
+- Task P5 next: Instrument key application logic with metrics.
