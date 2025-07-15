@@ -160,6 +160,7 @@ func run(cmd *cobra.Command, args []string) {
 		log.Info("Starting Prometheus metrics server...", "host", config.PrometheusHost, "port", config.PrometheusPort)
 		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("Prometheus metrics server error", "error", err, "host", config.PrometheusHost, "port", config.PrometheusPort)
+			os.Exit(1)
 		}
 	}()
 
@@ -184,9 +185,9 @@ func run(cmd *cobra.Command, args []string) {
 	if metricsServer != nil {
 		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 			log.Error("Prometheus metrics server shutdown error", "error", err)
-		} else {
-			log.Info("Prometheus metrics server stopped gracefully")
+			os.Exit(1)
 		}
+		log.Info("Prometheus metrics server stopped gracefully")
 	}
 
 	// Wait for all goroutines to complete
